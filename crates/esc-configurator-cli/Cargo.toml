@@ -1,0 +1,19 @@
+[package]
+name = "esc-configurator-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI tool for configuring BLHeli/AM32 ESCs"
+
+[dependencies]
+esc-protocol = { path = "../esc-protocol", features = ["std"] }
+esc-dshot = { path = "../esc-dshot", features = ["std"] }
+tokio.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+serialport.workspace = true
+dialoguer.workspace = true
+
+[[bin]]
+name = "esc-configurator"
+path = "src/main.rs"

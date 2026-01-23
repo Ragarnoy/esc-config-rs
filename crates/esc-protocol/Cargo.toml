@@ -1,0 +1,13 @@
+[package]
+name = "esc-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "BLHeli/AM32 ESC protocol implementation - no I/O, pure logic"
+
+[features]
+default = []
+std = ["thiserror/std"]
+
+[dependencies]
+thiserror.workspace = true

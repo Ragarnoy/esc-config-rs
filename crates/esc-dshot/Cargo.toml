@@ -1,0 +1,13 @@
+[package]
+name = "esc-dshot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DShot frame encoding/decoding - pure math, no I/O"
+
+[features]
+default = []
+std = []
+
+[dependencies]
+# Pure math, no external dependencies
