@@ -6,6 +6,7 @@ members = [
     "crates/esc-configurator-cli",
     "crates/esc-relay-core",
     "crates/esc-relay-fw",
+    "crates/rtttl-rs",
 ]
 
 # Exclude embedded firmware from default workspace operations
@@ -15,6 +16,7 @@ default-members = [
     "crates/esc-dshot",
     "crates/esc-configurator-cli",
     "crates/esc-relay-core",
+    "crates/rtttl-rs",
 ]
 
 [workspace.package]
