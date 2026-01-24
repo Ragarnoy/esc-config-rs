@@ -1,0 +1,18 @@
+[package]
+name = "rtttl-rs"
+version = "0.1.0"
+edition = "2021"
+description = "RTTTL (Ring Tone Text Transfer Language) parser - no_std compatible"
+license = "MIT OR Apache-2.0"
+keywords = ["rtttl", "ringtone", "nokia", "music", "no_std"]
+categories = ["no-std", "parser-implementations", "embedded"]
+
+[features]
+default = []
+std = []
+alloc = []
+
+[dependencies]
+
+[dev-dependencies]
+proptest = "1.4"
