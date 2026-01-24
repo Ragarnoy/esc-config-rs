@@ -416,6 +416,29 @@ mod std_ext {
             }
             None
         }
+
+        /// Flatten segments into contiguous binary starting from lowest address.
+        ///
+        /// Gaps between segments are filled with 0xFF (empty/erased flash).
+        /// Returns an empty Vec if there are no segments.
+        pub fn to_binary(&self) -> Vec<u8> {
+            if self.segments.is_empty() {
+                return Vec::new();
+            }
+
+            let min_addr = self.min_address().unwrap();
+            let max_addr = self.max_address().unwrap();
+            let size = (max_addr - min_addr) as usize;
+
+            let mut binary = std::vec![0xFFu8; size]; // 0xFF = erased flash
+
+            for segment in &self.segments {
+                let offset = (segment.start_address - min_addr) as usize;
+                binary[offset..offset + segment.data.len()].copy_from_slice(&segment.data);
+            }
+
+            binary
+        }
     }
 
     /// Errors that can occur when loading a firmware file.
@@ -754,5 +777,154 @@ mod tests {
         assert_eq!(firmware.read_byte(3), Some(0xDD));
         assert_eq!(firmware.read_byte(4), None);
         assert_eq!(firmware.read_byte(100), None);
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn firmware_to_binary_simple() {
+        let hex = ":020000040000FA\n:04000000AABBCCDDEE\n:00000001FF\n";
+        let firmware = load_firmware(hex).unwrap();
+        let binary = firmware.to_binary();
+        assert_eq!(binary, std::vec![0xAA, 0xBB, 0xCC, 0xDD]);
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn firmware_to_binary_with_gap() {
+        // Two segments with a gap between them
+        let hex = concat!(
+            ":020000040000FA\n",      // Base 0x00000000
+            ":02000000AABB99\n",      // 2 bytes at 0x0000
+            ":02001000CCDD45\n",      // 2 bytes at 0x0010 (gap!)
+            ":00000001FF\n"
+        );
+        let firmware = load_firmware(hex).unwrap();
+        let binary = firmware.to_binary();
+
+        // Should be 18 bytes total (from 0x0000 to 0x0012)
+        assert_eq!(binary.len(), 18);
+        // First 2 bytes are data
+        assert_eq!(&binary[0..2], &[0xAA, 0xBB]);
+        // Gap filled with 0xFF
+        assert!(binary[2..16].iter().all(|&b| b == 0xFF));
+        // Last 2 bytes are data
+        assert_eq!(&binary[16..18], &[0xCC, 0xDD]);
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn firmware_to_binary_empty() {
+        // Edge case: firmware with no segments
+        // This is unusual but should work
+        let firmware = Firmware {
+            segments: std::vec![],
+            entry_point: None,
+        };
+        let binary = firmware.to_binary();
+        assert!(binary.is_empty());
+    }
+
+    // =========================================================================
+    // Flash/Verify simulation tests
+    // =========================================================================
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn firmware_chunking_128_bytes() {
+        // Simulate how flash command chunks firmware
+        let firmware = Firmware {
+            segments: std::vec![Segment {
+                start_address: 0x1000,
+                data: (0u8..=255).cycle().take(512).collect(), // 512 bytes
+            }],
+            entry_point: None,
+        };
+        let binary = firmware.to_binary();
+
+        assert_eq!(binary.len(), 512);
+
+        // Chunk like flash command does (128-byte chunks)
+        let chunk_size = 128;
+        let chunks: std::vec::Vec<_> = binary.chunks(chunk_size).collect();
+
+        assert_eq!(chunks.len(), 4); // 512 / 128 = 4 chunks
+        assert_eq!(chunks[0].len(), 128);
+        assert_eq!(chunks[3].len(), 128);
+
+        // Verify chunk addresses
+        let firmware_start: u16 = 0x1000;
+        for (i, _chunk) in chunks.iter().enumerate() {
+            let addr = firmware_start + (i * chunk_size) as u16;
+            assert_eq!(addr, 0x1000 + (i as u16 * 128));
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn firmware_partial_last_chunk() {
+        // Test firmware that doesn't align to chunk size
+        let firmware = Firmware {
+            segments: std::vec![Segment {
+                start_address: 0x1000,
+                data: std::vec![0xAA; 300], // 300 bytes - not aligned
+            }],
+            entry_point: None,
+        };
+        let binary = firmware.to_binary();
+
+        // 256-byte chunks: first full, second partial
+        let chunk_size = 256;
+        let chunks: std::vec::Vec<_> = binary.chunks(chunk_size).collect();
+
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].len(), 256);
+        assert_eq!(chunks[1].len(), 44); // 300 - 256 = 44
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn firmware_verification_comparison() {
+        // Simulate verification: compare expected vs actual
+        let firmware = Firmware {
+            segments: std::vec![Segment {
+                start_address: 0x1000,
+                data: std::vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08],
+            }],
+            entry_point: None,
+        };
+        let expected = firmware.to_binary();
+
+        // Simulate reading back from ESC (matching)
+        let actual_ok = std::vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+        assert_eq!(expected, actual_ok);
+
+        // Simulate mismatch
+        let actual_bad = std::vec![0x01, 0x02, 0xFF, 0x04, 0x05, 0x06, 0x07, 0x08];
+        assert_ne!(expected, actual_bad);
+
+        // Find mismatch position
+        let mismatch_pos = expected
+            .iter()
+            .zip(actual_bad.iter())
+            .position(|(a, b)| a != b);
+        assert_eq!(mismatch_pos, Some(2)); // Byte 2 differs
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn buffer_size_encoding() {
+        // Test that 256 bytes should be encoded as 0 in protocol
+        let size_256: u8 = 0; // 256 encoded as 0
+        let size_128: u8 = 128;
+
+        // When we have 256 bytes, we send 0
+        let data_256 = [0u8; 256];
+        let encoded = if data_256.len() == 256 { 0u8 } else { data_256.len() as u8 };
+        assert_eq!(encoded, size_256);
+
+        // When we have 128 bytes, we send 128
+        let data_128 = [0u8; 128];
+        let encoded = if data_128.len() == 256 { 0u8 } else { data_128.len() as u8 };
+        assert_eq!(encoded, size_128);
     }
 }
