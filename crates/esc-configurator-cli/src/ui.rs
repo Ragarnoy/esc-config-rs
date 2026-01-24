@@ -41,10 +41,23 @@ pub fn confirm_operation(message: &str) -> Result<bool> {
 pub enum MainMenuAction {
     ViewSettings,
     EditSettings,
+    FlashFirmware,
+    VerifyFirmware,
+    Melody,
     BackupConfig,
     RestoreConfig,
     SaveToEsc,
     Exit,
+}
+
+/// Melody sub-menu options.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MelodyAction {
+    ViewMelody,
+    UploadMelody,
+    DownloadMelody,
+    ClearMelody,
+    Back,
 }
 
 /// Setting categories for grouped display.
@@ -145,6 +158,9 @@ pub fn show_main_menu(esc_name: &str, has_unsaved_changes: bool) -> Result<MainM
     let items = [
         "View Current Settings",
         "Edit Settings",
+        "Flash Firmware",
+        "Verify Firmware",
+        "Melody/Music",
         "Backup Config to File",
         "Restore Config from File",
         "Save Changes to ESC",
@@ -160,11 +176,84 @@ pub fn show_main_menu(esc_name: &str, has_unsaved_changes: bool) -> Result<MainM
     Ok(match selection {
         0 => MainMenuAction::ViewSettings,
         1 => MainMenuAction::EditSettings,
-        2 => MainMenuAction::BackupConfig,
-        3 => MainMenuAction::RestoreConfig,
-        4 => MainMenuAction::SaveToEsc,
+        2 => MainMenuAction::FlashFirmware,
+        3 => MainMenuAction::VerifyFirmware,
+        4 => MainMenuAction::Melody,
+        5 => MainMenuAction::BackupConfig,
+        6 => MainMenuAction::RestoreConfig,
+        7 => MainMenuAction::SaveToEsc,
         _ => MainMenuAction::Exit,
     })
+}
+
+/// Show the melody sub-menu.
+pub fn show_melody_menu() -> Result<MelodyAction> {
+    println!("\nMelody/Music");
+    println!("============");
+
+    let items = [
+        "View Current Melody",
+        "Upload Melody (from file)",
+        "Download Melody (to file)",
+        "Clear Melody",
+        "Back",
+    ];
+
+    let selection = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Select action")
+        .items(items)
+        .default(0)
+        .interact()?;
+
+    Ok(match selection {
+        0 => MelodyAction::ViewMelody,
+        1 => MelodyAction::UploadMelody,
+        2 => MelodyAction::DownloadMelody,
+        3 => MelodyAction::ClearMelody,
+        _ => MelodyAction::Back,
+    })
+}
+
+/// Prompt user for a firmware hex file path.
+pub fn prompt_firmware_path() -> Result<Option<String>> {
+    let path: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Path to firmware hex file (or empty to cancel)")
+        .allow_empty(true)
+        .interact_text()?;
+
+    if path.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(path))
+    }
+}
+
+/// Prompt user for a melody file path (supports RTTTL or binary).
+pub fn prompt_melody_upload_path() -> Result<Option<String>> {
+    let path: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Path to melody file (RTTTL .txt or binary .bin, empty to cancel)")
+        .allow_empty(true)
+        .interact_text()?;
+
+    if path.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(path))
+    }
+}
+
+/// Prompt user for melody download output path.
+pub fn prompt_melody_download_path() -> Result<Option<String>> {
+    let path: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Save melody to file (empty to cancel)")
+        .allow_empty(true)
+        .interact_text()?;
+
+    if path.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(path))
+    }
 }
 
 /// Show category selection menu.
@@ -218,6 +307,16 @@ pub fn select_setting_in_category(
 /// Get display value for a setting from config.
 pub fn get_setting_display_value(setting: Setting, config: &Am32Config) -> String {
     match setting {
+        // Throttle/Rate settings
+        Setting::MaxRateOfChange => format!("{} (display: {:.1})", config.max_rate_of_change(), config.max_rate_of_change_display()),
+        Setting::MinDuty => format!("{} (display: {:.1}%)", config.min_duty(), config.min_duty_percent()),
+        Setting::DisableStickCalibration => on_off(config.disable_stick_calibration()),
+        Setting::AbsoluteVoltage => format!("{}", config.absolute_voltage()),
+        Setting::CurrentLimitP => format!("{} (display: {})", config.current_limit_p(), config.current_limit_p_display()),
+        Setting::CurrentLimitI => format!("{}", config.current_limit_i()),
+        Setting::CurrentLimitD => format!("{} (display: {})", config.current_limit_d(), config.current_limit_d_display()),
+        Setting::ActiveBrakeStrength => format!("{}/10", config.active_brake_strength()),
+        // Motor settings
         Setting::DirectionReversed => {
             if config.direction_reversed() {
                 "Reversed"
@@ -259,6 +358,23 @@ pub fn get_setting_display_value(setting: Setting, config: &Am32Config) -> Strin
         Setting::UseHallSensors => on_off(config.use_hall_sensors()),
         Setting::SineModeRange => format!("{}%", config.sine_mode_range()),
         Setting::DragBrakeStrength => format!("{}/10", config.drag_brake_strength()),
+        Setting::RunningBrakeStrength => format!("{}/10", config.running_brake_strength()),
+        Setting::AutoTiming => on_off(config.auto_timing()),
+        Setting::TemperatureLimit => {
+            match config.temperature_limit_celsius() {
+                Some(t) => format!("{}°C", t),
+                None => "Disabled".to_string(),
+            }
+        }
+        Setting::CurrentLimit => {
+            match config.current_limit_amps() {
+                Some(a) => format!("{}A", a),
+                None => "Disabled".to_string(),
+            }
+        }
+        Setting::SineModePower => format!("{}/10", config.sine_mode_power()),
+        Setting::SignalType => format!("{}", config.signal_type()),
+        Setting::ServoDeadband => format!("{}", config.servo_deadband()),
     }
 }
 
