@@ -34,6 +34,23 @@ See `docs/` folder for detailed implementation guides.
 | 12 | Config Serialization (serde/TOML) | - | [x] |
 | 13 | ESC Diagnostics & Recovery | - | [ ] |
 
+## DShot Features (Relay Firmware)
+
+| # | Feature | Status | Notes |
+|---|---------|--------|-------|
+| D1 | DShot TX (300/600) | [x] | Beep commands working |
+| D2 | Spin Direction Commands | [ ] | Commands 20/21 + SaveSettings (12) |
+| D3 | 3D Mode Toggle | [ ] | Commands 9/10 |
+| D4 | LED Control | [ ] | Commands 22-29 (if ESC has LEDs) |
+| D5 | Extended Telemetry (EDT) | [ ] | Requires bidirectional DShot (RX PIO + GCR decode) |
+
+### EDT Implementation Notes
+- Requires RX PIO program to read inverted pulse widths
+- GCR 5-to-4 bit decoding (21 bits → 16 data + CRC)
+- Pin direction switching: TX → high-Z → RX → TX
+- ~25µs turnaround, ~30µs response window
+- Provides: eRPM, voltage, current, temperature
+
 ---
 
 ## Quick Reference

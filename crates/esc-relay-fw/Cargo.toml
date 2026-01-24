@@ -13,6 +13,10 @@ path = "src/main.rs"
 name = "motor_test"
 path = "src/bin/motor_test.rs"
 
+[[bin]]
+name = "beep_test"
+path = "src/bin/beep_test.rs"
+
 [dependencies]
 esc-relay-core = { path = "../esc-relay-core", features = ["defmt"] }
 esc-dshot = { path = "../esc-dshot" }
@@ -39,5 +43,3 @@ usbd-serial = "0.2"
 # Misc
 static_cell = "2"
 fixed = "1.28"
-embedded-io-async = "0.6"
-heapless = "0.8"

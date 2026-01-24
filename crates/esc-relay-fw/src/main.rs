@@ -206,8 +206,32 @@ async fn esc_task(mut uart: onewire_uart::OneWireUart<'static, PIO0, 0, 1>) {
 
         if is_write_combo {
             // Handle write atomically to avoid USB latency issues
+            //
+            // CLI sends: [set_addr:6] [set_buffer:6] [data:N] [data_crc:2]
+            // - set_addr:   [FF 00 ADDR_H ADDR_L CRC_L CRC_H]
+            // - set_buffer: [FE 00 00 SIZE CRC_L CRC_H]
+            // - data + crc: [DATA...] [CRC_L CRC_H]
+            //
+            // We need to:
+            // 1. Send set_addr to ESC → expect ACK
+            // 2. Send set_buffer to ESC → NO ACK (AM32 quirk)
+            // 3. Send data + our CRC to ESC → expect ACK
+
             let mut resp_buf = [0u8; 8];
             let mut resp_len = 0usize;
+
+            // Parse size from set_buffer command (tx_buf[9])
+            // SIZE=0 means 256 bytes in AM32 protocol
+            let size = if tx_buf[9] == 0 { 256usize } else { tx_buf[9] as usize };
+            let data_start = 12usize; // After set_addr (6) + set_buffer (6)
+            let data_available = tx_len.saturating_sub(data_start + 2); // -2 for CLI's CRC
+
+            if data_available < size {
+                warn!("Incomplete write data: have {}, need {}", data_available, size);
+                ESC_TO_USB.send(DataPacket::new(&resp_buf[..resp_len])).await;
+                uart.switch_to_tx_idle();
+                continue;
+            }
 
             // Step 1: Set Address → ACK
             uart.write(&tx_buf[0..6]).await;
@@ -223,43 +247,39 @@ async fn esc_task(mut uart: onewire_uart::OneWireUart<'static, PIO0, 0, 1>) {
             resp_buf[resp_len] = 0x30;
             resp_len += 1;
 
-            // Step 2: Set Buffer [FE 00 00 30 CRC] → NO ACK
-            let set_buffer_cmd: [u8; 4] = [0xFE, 0x00, 0x00, 0x30];
-            let set_buffer_crc = crc16_ibm(&set_buffer_cmd);
-            let set_buffer_pkt: [u8; 6] = [
-                0xFE, 0x00, 0x00, 0x30,
-                set_buffer_crc as u8,
-                (set_buffer_crc >> 8) as u8,
-            ];
+            // Step 2: Set Buffer → NO ACK
+            // Use the CLI's set_buffer command directly (already has correct size + CRC)
             Timer::after_millis(1).await;
-            uart.write(&set_buffer_pkt).await;
+            uart.write(&tx_buf[6..12]).await;
 
-            // Step 3: Payload (48 data + CRC) → ACK
-            let data_start = 9usize;
-            let data_available = tx_len.saturating_sub(data_start);
-            if data_available < 48 {
-                warn!("Incomplete write data");
-                ESC_TO_USB.send(DataPacket::new(&resp_buf[..resp_len])).await;
-                uart.switch_to_tx_idle();
-                continue;
-            }
-
-            let mut payload = [0u8; 50];
-            payload[0..48].copy_from_slice(&tx_buf[data_start..data_start+48]);
-            let data_crc = crc16_ibm(&payload[0..48]);
-            payload[48] = data_crc as u8;
-            payload[49] = (data_crc >> 8) as u8;
+            // Step 3: Payload (data + our CRC) → ACK
+            // Compute our own CRC for the data
+            let data_crc = crc16_ibm(&tx_buf[data_start..data_start + size]);
 
             Timer::after_millis(1).await;
-            uart.write(&payload).await;
+            uart.write(&tx_buf[data_start..data_start + size]).await;
+            let crc_bytes = [data_crc as u8, (data_crc >> 8) as u8];
+            uart.write(&crc_bytes).await;
 
-            let n2 = uart.read_exact_with_timeout(&mut rx_buf, 1, 100).await;
+            // Longer timeout for larger writes (flash operations take time)
+            let timeout_ms = if size > 64 { 200 } else { 100 };
+            let n2 = uart.read_exact_with_timeout(&mut rx_buf, 1, timeout_ms).await;
             if n2 > 0 {
                 resp_buf[resp_len] = rx_buf[0];
                 resp_len += 1;
             }
 
             ESC_TO_USB.send(DataPacket::new(&resp_buf[..resp_len])).await;
+            uart.switch_to_tx_idle();
+            continue;
+        }
+
+        // Check if this is a set_buffer command (0xFE) - NO ACK expected
+        // Must forward quickly so ESC receives data without timeout
+        let is_set_buffer = tx_len >= 1 && tx_buf[0] == 0xFE;
+        if is_set_buffer {
+            uart.write(&tx_buf[..tx_len]).await;
+            // No response expected from set_buffer, don't wait
             uart.switch_to_tx_idle();
             continue;
         }

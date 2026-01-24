@@ -10,7 +10,6 @@ use embassy_rp::pio::{
     StateMachine,
 };
 use esc_dshot::Speed;
-use fixed::traits::ToFixed;
 
 use embassy_rp::pio::Pin;
 
@@ -41,18 +40,6 @@ impl<'d, PIO: Instance, const SM: usize> DshotPio<'d, PIO, SM> {
         out_pin: Pin<'d, PIO>,
         speed: Speed,
     ) -> Self {
-        // DShot timing (bit period in cycles at 150MHz system clock)
-        // DShot150: 6.67us = 1000 cycles
-        // DShot300: 3.33us = 500 cycles
-        // DShot600: 1.67us = 250 cycles
-        // DShot1200: 0.83us = 125 cycles
-        let bit_cycles = match speed {
-            Speed::DShot150 => 1000u32,
-            Speed::DShot300 => 500,
-            Speed::DShot600 => 250,
-            Speed::DShot1200 => 125,
-        };
-
         // DShot bit encoding:
         // - "0" bit: high for ~35% of bit period, low for rest
         // - "1" bit: high for ~75% of bit period, low for rest
@@ -95,18 +82,8 @@ impl<'d, PIO: Instance, const SM: usize> DshotPio<'d, PIO, SM> {
         let mut cfg = Config::default();
         cfg.use_program(&pio.load_program(&prg.program), &[&out_pin]);
 
-        // Configure clock divider for bit timing
-        // System clock is 150MHz, we want bit_cycles per bit
-        //
-        // PIO cycles per bit (tracing through the program):
-        // - out y, 1        : 1 cycle
-        // - jmp !y, bit0    : 1 cycle
-        // - bit1/bit0 path  : 16 cycles (11+5 or 5+11)
-        // - jmp x--, bitloop: 1 cycle
-        // Total: ~19 cycles per bit
-        let cycles_per_bit_pio = 19u32;
-        let div = (bit_cycles / cycles_per_bit_pio).max(1);
-        cfg.clock_divider = (div as u16).to_fixed();
+        // Configure clock divider for bit timing using fractional precision
+        cfg.clock_divider = Self::calc_divider(speed);
 
         cfg.shift_out = ShiftConfig {
             auto_fill: false,
@@ -120,6 +97,40 @@ impl<'d, PIO: Instance, const SM: usize> DshotPio<'d, PIO, SM> {
         sm.set_enable(true);
 
         Self { sm, pin: out_pin }
+    }
+
+    /// Change DShot speed by adjusting the clock divider.
+    ///
+    /// This does not reload the PIO program, just changes timing.
+    /// Uses fractional divider for better accuracy.
+    pub fn set_speed(&mut self, speed: Speed) {
+        self.sm.set_enable(false);
+        self.sm.restart();
+        self.sm.set_clock_divider(Self::calc_divider(speed));
+        self.sm.set_enable(true);
+    }
+
+    /// Calculate the clock divider for a given DShot speed.
+    /// Uses fractional divider (8-bit fraction) for better accuracy.
+    fn calc_divider(speed: Speed) -> fixed::FixedU32<fixed::types::extra::U8> {
+        // Target bit cycles at 150MHz system clock
+        let bit_cycles: u32 = match speed {
+            Speed::DShot150 => 1000,
+            Speed::DShot300 => 500,
+            Speed::DShot600 => 250,
+            Speed::DShot1200 => 125,
+        };
+
+        // PIO cycles per bit (from program analysis)
+        const CYCLES_PER_BIT_PIO: u32 = 19;
+
+        // Calculate divider with 8-bit fractional precision
+        // divider = bit_cycles / CYCLES_PER_BIT_PIO
+        // To get 8-bit fraction: (bit_cycles * 256) / CYCLES_PER_BIT_PIO
+        let div_fixed_raw = (bit_cycles << 8) / CYCLES_PER_BIT_PIO;
+
+        // Convert to FixedU32<U8> - the raw value already has 8 fractional bits
+        fixed::FixedU32::<fixed::types::extra::U8>::from_bits(div_fixed_raw)
     }
 
     /// Release resources for reuse.
