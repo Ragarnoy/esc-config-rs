@@ -151,7 +151,6 @@ impl Relay {
     /// Read 256 bytes from the current address.
     ///
     /// Returns the raw data (256 bytes, encrypted for config block).
-    #[allow(dead_code)]
     pub fn read_256(&mut self) -> Result<[u8; 256]> {
         let packet = self
             .session
@@ -175,6 +174,23 @@ impl Relay {
         let mut result = [0u8; 256];
         result.copy_from_slice(data);
         Ok(result)
+    }
+
+    /// Read a chunk from flash memory.
+    ///
+    /// Reads up to 256 bytes from the specified flash address.
+    /// For verification, typically reads in 256-byte chunks.
+    pub fn read_flash(&mut self, address: u16, size: usize) -> Result<Vec<u8>> {
+        if !self.session.is_connected() {
+            bail!("not connected");
+        }
+
+        self.set_address(address)?;
+
+        // Read 256 bytes and truncate to requested size
+        let data = self.read_256()?;
+
+        Ok(data[..size.min(256)].to_vec())
     }
 
     /// Read 16 bytes from the current address.
@@ -400,6 +416,59 @@ impl Relay {
         self.read_16()
     }
 
+    /// Read EEPROM (first 48 bytes of config block).
+    ///
+    /// Used for safety bit handling during firmware flashing.
+    pub fn read_eeprom(&mut self) -> Result<[u8; 48]> {
+        use esc_protocol::config::CONFIG_ADDRESS;
+        self.set_address(CONFIG_ADDRESS)?;
+        self.read_48()
+    }
+
+    /// Write EEPROM (first 48 bytes of config block).
+    ///
+    /// Used for safety bit handling during firmware flashing.
+    pub fn write_eeprom(&mut self, data: &[u8; 48]) -> Result<()> {
+        // Build a full 256-byte config block with the 48 bytes
+        let mut config_data = [0xFFu8; 256];
+        config_data[0..48].copy_from_slice(data);
+        let block = ConfigBlock::from_array(config_data);
+        self.write_config(&block)
+    }
+
+    /// Read melody data from ESC (128 bytes at config+48).
+    pub fn read_melody(&mut self) -> Result<[u8; 128]> {
+        use esc_protocol::config::CONFIG_ADDRESS;
+        use esc_protocol::melody::MELODY_OFFSET;
+
+        if !self.session.is_connected() {
+            bail!("not connected");
+        }
+
+        let melody_addr = CONFIG_ADDRESS + MELODY_OFFSET as u16;
+        self.set_address(melody_addr)?;
+
+        // Read 256 bytes and take first 128
+        let data = self.read_256()?;
+        let mut result = [0u8; 128];
+        result.copy_from_slice(&data[..128]);
+        Ok(result)
+    }
+
+    /// Write melody data to ESC (128 bytes at config+48).
+    pub fn write_melody(&mut self, data: &[u8; 128]) -> Result<()> {
+        use esc_protocol::config::CONFIG_ADDRESS;
+        use esc_protocol::melody::MELODY_OFFSET;
+
+        if !self.session.is_connected() {
+            bail!("not connected");
+        }
+
+        let melody_addr = CONFIG_ADDRESS + MELODY_OFFSET as u16;
+        self.write_chunk(melody_addr, data)?;
+        Ok(())
+    }
+
     /// Write configuration block to the ESC.
     ///
     /// The relay firmware handles the AM32 write sequence atomically:
@@ -445,6 +514,70 @@ impl Relay {
         }
 
         self.commit()?;
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------------
+    // Firmware Flashing Operations
+    // ------------------------------------------------------------------------
+
+    /// Write a chunk to flash memory (for firmware flashing).
+    ///
+    /// The write sequence for AM32:
+    /// 1. Set Address → ACK
+    /// 2. Set Buffer Size → NO ACK (AM32 quirk - just wait 25ms)
+    /// 3. Send Data Buffer → ACK
+    /// 4. Commit Flash → ACK
+    ///
+    /// # Arguments
+    /// * `address` - Flash address to write to
+    /// * `data` - Data chunk to write (typically 128 bytes)
+    pub fn write_chunk(&mut self, address: u16, data: &[u8]) -> Result<()> {
+        use esc_protocol::crc::crc16_ibm_bytes;
+
+        if !self.session.is_connected() {
+            bail!("not connected");
+        }
+
+        // 1. Set address
+        self.set_address(address)?;
+
+        // 2. Set buffer size (NO ACK - AM32 bootloader quirk)
+        // Format: [0xFE] [0x00] [0x00] [SIZE] [CRC_LO] [CRC_HI]
+        // SIZE=0 means 256 bytes
+        let size = data.len() as u8;
+        let size_cmd = [0xFE, 0x00, 0x00, size];
+        let crc = crc16_ibm_bytes(&size_cmd);
+
+        self.port.write_all(&size_cmd)?;
+        self.port.write_all(&crc)?;
+        self.port.flush()?;
+
+        // Critical: NO response expected, just wait
+        std::thread::sleep(Duration::from_millis(25));
+
+        // 3. Send data buffer with CRC
+        let data_crc = crc16_ibm_bytes(data);
+        self.port.write_all(data)?;
+        self.port.write_all(&data_crc)?;
+        self.port.flush()?;
+
+        // Wait for ACK with longer timeout
+        self.port.set_timeout(Duration::from_millis(75))?;
+        let mut response = [0u8; 1];
+        self.read_exact(&mut response)
+            .context("timeout waiting for data ACK")?;
+
+        if response[0] != 0x30 {
+            self.port.set_timeout(DEFAULT_TIMEOUT)?;
+            bail!("data write failed: ACK=0x{:02X} (expected 0x30)", response[0]);
+        }
+
+        // 4. Commit flash
+        self.port.set_timeout(Duration::from_millis(50))?;
+        self.commit()?;
+
+        self.port.set_timeout(DEFAULT_TIMEOUT)?;
         Ok(())
     }
 
