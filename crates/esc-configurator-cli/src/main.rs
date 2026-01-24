@@ -116,6 +116,62 @@ enum Commands {
         #[arg(short, long)]
         file: String,
     },
+
+    /// Melody/music management
+    Melody {
+        #[command(subcommand)]
+        command: MelodyCommands,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum MelodyCommands {
+    /// Download melody from ESC to file
+    Download {
+        /// Serial port device
+        #[arg(short, long)]
+        device: String,
+
+        /// Output file path
+        #[arg(short, long)]
+        output: String,
+    },
+
+    /// Upload melody from file to ESC
+    Upload {
+        /// Serial port device
+        #[arg(short, long)]
+        device: String,
+
+        /// Input melody file path
+        #[arg(short, long)]
+        input: String,
+    },
+
+    /// Clear melody from ESC
+    Clear {
+        /// Serial port device
+        #[arg(short, long)]
+        device: String,
+    },
+
+    /// Show melody information from file
+    Info {
+        /// Melody file path
+        #[arg(short, long)]
+        file: String,
+    },
+
+    /// Convert RTTTL text file to binary melody
+    Convert {
+        /// Input RTTTL file path
+        #[arg(short, long)]
+        input: String,
+
+        /// Output binary file path
+        #[arg(short, long)]
+        output: String,
+    },
 }
 
 #[tokio::main]
@@ -169,6 +225,23 @@ async fn main() -> anyhow::Result<()> {
         Commands::HexInfo { file } => {
             commands::hex_info(&file)?;
         }
+        Commands::Melody { command } => match command {
+            MelodyCommands::Download { device, output } => {
+                commands::melody_download(&device, &output)?;
+            }
+            MelodyCommands::Upload { device, input } => {
+                commands::melody_upload(&device, &input)?;
+            }
+            MelodyCommands::Clear { device } => {
+                commands::melody_clear(&device)?;
+            }
+            MelodyCommands::Info { file } => {
+                commands::melody_info(&file)?;
+            }
+            MelodyCommands::Convert { input, output } => {
+                commands::melody_convert(&input, &output)?;
+            }
+        },
     }
 
     Ok(())
