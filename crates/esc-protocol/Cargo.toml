@@ -8,6 +8,12 @@ description = "BLHeli/AM32 ESC protocol implementation - no I/O, pure logic"
 [features]
 default = []
 std = ["thiserror/std"]
+serde = ["dep:serde", "std"]
 
 [dependencies]
 thiserror.workspace = true
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
+rtttl-rs = { path = "../rtttl-rs" }
+
+[dev-dependencies]
+toml = "0.8"
