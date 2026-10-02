@@ -92,19 +92,20 @@ esc-configurator melody convert -i melody.rtttl -o melody.bin
 The system consists of three components:
 
 1. **CLI tool** (`esc-configurator-cli`) - Runs on PC, communicates with relay over USB serial
-2. **Relay firmware** (`esc-relay-fw`) - Runs on RP2350, bridges USB to ESC
-3. **Protocol libraries** (`esc-protocol`, `esc-session`, `rtttl-rs`) - Shared logic,
-   no_std compatible; `esc-session` is what a flight controller embeds
+2. **Relay firmware** (`esc-relay-fw`) - Runs on RP2350, runs the ESC session and
+   serves typed operations over USB
+3. **Libraries** (`esc-protocol`, `esc-session`, `esc-config-icd`, `esc-onewire-rp`,
+   `rtttl-rs`) - no_std; a flight controller embeds `esc-session` and the ICD types
 
 ```
-PC (USB) <---> Relay MCU <---> ESC
-                  |
-                  +-- UART 19200 (BLHeli/AM32 bootloader protocol)
+PC (CLI) --USB CDC: postcard-rpc, COBS--> Relay (RP2350) --one-wire 19200--> ESC
 ```
 
 All bootloader sequencing and timing lives in `esc-session`, which runs over any
-half-duplex `Link`. Today the CLI drives it through the relay's USB passthrough; the
-relay is being moved to run the session itself (see `docs/REVAMP.md`).
+half-duplex `Link`. The relay runs it over a PIO UART and answers one request per
+operation (connect, read/write settings, flash a chunk, run), so USB latency never
+touches the bootloader protocol. The relay enumerates as `1209:0001`; with one relay
+plugged in, interactive mode finds it without `-d`.
 
 ## Crates
 
@@ -112,6 +113,8 @@ relay is being moved to run the session itself (see `docs/REVAMP.md`).
 |-------|-------------|--------|
 | `esc-protocol` | AM32 bootloader frames, CRC-16, device/layout, EEPROM layout, melody, Intel HEX | Yes |
 | `esc-session` | Bootloader session (connect, read, write, settings, flash) over a `Link` | Yes |
+| `esc-config-icd` | Typed ESC operations as postcard-rpc endpoints | Yes |
+| `esc-onewire-rp` | RP2040/RP235x PIO one-wire UART implementing `Link` | Yes |
 | `esc-relay-fw` | Embassy firmware for RP2350 | N/A |
 | `rtttl-rs` | RTTTL (Ring Tone Text Transfer Language) parser | Yes |
 | `esc-configurator-cli` | CLI with interactive TUI | No |
@@ -122,9 +125,8 @@ Connect the relay MCU to your ESC signal wire and power the relay first: the AM3
 bootloader stays active when the signal line is driven high at power-on, which the
 relay does. A signal held low for 20 ms makes it start the ESC firmware.
 
-The relay handles:
-- Half-duplex one-wire UART via PIO at 19200 baud
-- USB CDC serial interface to PC
+The relay is not a USB-serial bridge any more: tools that speak the bootloader
+protocol themselves (am32.ca direct-connect) do not work through it.
 
 Pin assignments for RP2350 (configurable in firmware source):
 - GPIO15: ESC signal wire (one-wire half-duplex UART) — any GPIO can be used

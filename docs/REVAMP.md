@@ -6,15 +6,17 @@ and relay may be broken during Phase 2 and must work again at the end of Phase 3
 This file is the plan; tick items off as they land. The
 target layout is a proposal, not a decision: the audit (Phase 1) may change it.
 
-## Where things stand (2026-10-02, Phase 2)
+## Where things stand (2026-10-02, Phase 3 code done, bench pending)
 
-- `esc-session` holds the bootloader driver; 23 tests run it against a simulated AM32
+- `esc-session` holds the bootloader driver; 27 tests run it against a simulated AM32
   bootloader. `esc-protocol` is reduced to AM32 frames, classification, layout,
   settings layout, melody and Intel HEX, all `no_std`. `esc-relay-core`, MSP and
   four-way are gone.
-- The CLI runs on `esc-session` through a `Link` over the relay's USB passthrough. It
-  builds and its logic follows the findings, but it has not been run on hardware.
-- Below, "Structural problems" is the pre-revamp state (Phase 0 baseline).
+- The relay firmware runs `esc-session` over `esc-onewire-rp` and serves
+  `esc-config-icd` endpoints; the CLI calls them. Nothing has run on hardware yet:
+  the bench regression and the Phase 1 bench checklist are what is left.
+- Below, "Structural problems" is the pre-revamp state (Phase 0 baseline); all six
+  are resolved (1, 3, 4, 6 in Phase 2; 2, 5 in Phase 3).
 
 ### Structural problems (baseline)
 
@@ -276,8 +278,8 @@ Noticed during Phase 0, for the audit:
 - [x] Error handling: `unwrap`/`expect`/silent truncation (`DataPacket::new` clamps to
       280 bytes without telling anyone) listed. (F3, F15, F16, F20)
 - [ ] Bench: bootloader entry (high vs low, power cycle or signal-timeout reset), the
-      real inter-command timeouts, keepalive interval. Record in
-      `docs/protocol-direct.md`.
+      real inter-command timeouts, keepalive interval. Record in this file
+      (the bench checklist below).
 - [x] Output: a findings list in this file, each with a fix or a "won't fix".
       (Phase 1 findings; scope answers need a decision)
 
@@ -327,12 +329,65 @@ takes the next frame (even a connect) as payload until it gets a well-formed pay
 of the announced size or is power-cycled.
 
 ### Phase 3: firmware and CLI on the new core
-- [ ] `esc-onewire-rp` crate, clock-derived divider.
-- [ ] `esc-config-icd`; relay firmware speaks it over USB (postcard + COBS, like Elle).
-- [ ] CLI talks the ICD; byte passthrough mode kept only if am32.ca direct-connect
-      still matters (it relies on the FTDI VID trick).
+- [x] `esc-onewire-rp` crate, clock-derived divider.
+- [x] `esc-config-icd`; relay firmware speaks it over USB (postcard + COBS, like Elle).
+- [x] CLI talks the ICD; byte passthrough mode kept only if am32.ca direct-connect
+      still matters (it relies on the FTDI VID trick). **Dropped**: the relay speaks
+      only the ICD; VID:PID moved from the borrowed FTDI `0403:0001` to pid.codes
+      `1209:0001`.
 - [ ] Bench regression: backup / set / restore / flash on a real ESC, compared with
       backups taken before the revamp.
+
+As landed:
+
+- **Transport.** USB CDC-ACM; each message is a postcard-rpc header + postcard body,
+  COBS-encoded, 0x00-delimited (Elle's RTT framing, `FrameBuf` copied from
+  `elle-system`). postcard-rpc's own embassy-usb server targets embassy-usb 0.5; we
+  are on 0.6 (Elle's rev), so `WireTx`/`WireRx` are hand-written (`esc-relay-fw/src/wire.rs`).
+  Host: postcard-rpc's `cobs-serial` client.
+- **Server shape.** The dispatch context owns the UART and, while connected, the
+  connect reply and layout; each `async` handler resumes an `Esc` over the borrowed
+  UART (`Esc::resume`, `impl Link for &mut L`). No task or channel: one request at
+  a time, run to completion.
+- **ICD** (`esc-config-icd`, paths `esc/…`, every response `Result<_, EscError>`):
+
+  | Endpoint | Request | Response |
+  |---|---|---|
+  | `esc/server/info` | `()` | `ServerInfo` (firmware version) |
+  | `esc/connect` | `()` | `EscInfo` (ids, protocol version, layout, max image) |
+  | `esc/disconnect` | `()` | `()` (forget the session; ESC stays in its bootloader) |
+  | `esc/run` | `()` | `()` (Run frame; the app starts if byte 0 is `0x01`) |
+  | `esc/eeprom/read` | `()` | 192 bytes |
+  | `esc/eeprom/write` | 192 bytes | `()` |
+  | `esc/name` | `()` | 32 bytes |
+  | `esc/read` | `{address, len ≤ 256}` | bytes |
+  | `esc/flash/begin` | `()` | `()` (boot byte cleared) |
+  | `esc/flash/chunk` | `{offset, data ≤ 256}` | `()` (written and read back) |
+  | `esc/flash/finish` | `()` | `()` (boot byte set) |
+  | `esc/flash/read` | `{offset, len ≤ 256}` | bytes |
+
+- **Host policy** lives in the CLI (`device.rs`, tested against an in-memory
+  device): edits touch settings bytes 5..48 only, restore merges 5..192 and refuses
+  another EEPROM layout version, a flash is begin / 256-byte chunks / finish and
+  leaves the boot byte cleared on error.
+- Findings closed in Phase 3: F10 (one frame per `send`, no relay re-framing), F11
+  and F15 (no byte sniffing, no USB aggregation), structural problems 2 (relay byte
+  matching) and 5 (divider from `clk_sys_freq()`, checked at compile time for
+  125/150/200 MHz).
+- The pre-audit protocol docs (`protocol-direct.md`, `flash-implementation.md`,
+  `memory-layout.md`, `features.md`) are deleted; this file replaces them.
+
+Bench regression (props off; take a backup with the pre-revamp CLI, `f07519a`, first):
+
+1. `esc-configurator read -d <port>`: connect info and layout match the ESC (F051:
+   app `0x1000`, EEPROM `0x7C00`; G071: shift 2, EEPROM `0x7E00`).
+2. `backup`: byte-identical to the pre-revamp backup.
+3. `set -s beep-volume -v 3`, `show`, power-cycle (relay powered first), `show`:
+   change kept, melody and CAN bytes unchanged (compare with `backup`).
+4. `restore` the step 2 backup: `backup` again is identical to it.
+5. `flash` the ESC's current hex, `verify`, `run`: the ESC beeps and runs.
+6. With a logic analyser on the signal wire: no gap above ~200 µs inside a frame
+   (payload + CRC), and reply timings against P5.
 
 ### Phase 4: hand-off to Elle
 - [ ] Tag a release; Elle pins it by git rev.

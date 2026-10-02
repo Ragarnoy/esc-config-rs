@@ -42,9 +42,14 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --target thumbv8m.main-none-eabihf -p esc-protocol -p esc-session -p rtttl-rs
+        run: |
+          cargo build --target thumbv8m.main-none-eabihf -p esc-protocol -p esc-session -p esc-config-icd -p rtttl-rs
+          cargo build --target thumbv8m.main-none-eabihf -p esc-config-icd --features session
+          cargo build --target thumbv8m.main-none-eabihf -p esc-onewire-rp --features rp235xa
       - name: Clippy (no warnings)
-        run: cargo clippy --target thumbv8m.main-none-eabihf -p esc-protocol -p esc-session -p rtttl-rs -- -D warnings
+        run: |
+          cargo clippy --target thumbv8m.main-none-eabihf -p esc-protocol -p esc-session -p esc-config-icd -p rtttl-rs -- -D warnings
+          cargo clippy --target thumbv8m.main-none-eabihf -p esc-onewire-rp --features rp235xa -- -D warnings
 
   firmware:
     name: Relay firmware (RP2350)

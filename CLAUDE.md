@@ -16,16 +16,16 @@ being reshaped so a flight controller (Elle, `../elle`, proposal
 - The bootloader sequencing lives in `esc-session`: `no_std`, async, hardware-free,
   generic over a small `Link` trait, tested against a simulated AM32 bootloader
   (`crates/esc-session/tests/fake_esc`). Protocol rules belong there, not in callers.
-- The relay firmware stops pattern-matching the USB byte stream; it runs the session
-  itself and speaks typed operations (shared ICD with Elle).
+- The relay firmware runs the session itself and serves typed operations
+  (`esc-config-icd`, postcard-rpc over USB CDC with COBS frames, the same framing as
+  Elle). No bootloader frame crosses USB.
 - Work goes phase by phase (baseline → audit → core extraction → firmware/CLI → hand-off).
 - Protocol facts come from the AM32 bootloader source and are written down in
-  `docs/REVAMP.md` ("How the bootloader actually behaves"). Older docs in `docs/`
-  (`protocol-direct.md`, `flash-implementation.md`, `memory-layout.md`) predate the
-  audit and contain errors listed there; trust REVAMP.md over them.
-- The CLI and relay need not work during Phase 2; they must work again at the end of
-  Phase 3. Bench regression then: backup / set / restore / flash on a real ESC,
-  compared with pre-revamp backups.
+  `docs/REVAMP.md` ("How the bootloader actually behaves"); the pre-audit protocol
+  docs were deleted. `docs/config-fields.md` is the EEPROM field reference.
+- Remaining: the bench regression (backup / set / restore / flash on a real ESC,
+  compared with pre-revamp backups) and the Phase 1 bench checklist, then Phase 4
+  (hand-off to Elle).
 
 ## Build Commands
 
@@ -59,21 +59,26 @@ crates/
 │   ├── link.rs        # `Link` trait, `Duration`
 │   ├── session.rs     # `Esc`: connect, read, write, settings, flash, run
 │   └── tests/         # Simulated AM32 bootloader + session tests
-├── esc-relay-fw/      # Embassy firmware for RP2350
-│   ├── main.rs        # Entry point, USB CDC-ACM, write handler
-│   └── onewire_uart.rs # PIO-based half-duplex UART
+├── esc-config-icd/    # Typed ESC operations as postcard-rpc endpoints (no_std)
+├── esc-onewire-rp/    # RP2040/RP235x PIO one-wire UART, an esc-session `Link`
+├── esc-relay-fw/      # Embassy firmware for RP2350 (not a default member)
+│   ├── main.rs        # USB CDC-ACM, PIO UART, postcard-rpc server
+│   ├── app.rs         # ICD handlers: each runs one whole ESC operation
+│   ├── wire.rs        # postcard-rpc WireTx/WireRx over CDC, COBS-framed
+│   └── frame_buf.rs   # COBS frame reassembly (copied from Elle)
 ├── rtttl-rs/          # RTTTL parser (no_std, separate crate)
 │   └── lib.rs         # Ring Tone Text Transfer Language parser
 └── esc-configurator-cli/  # CLI tool (std)
     ├── main.rs        # Clap CLI definition
     ├── commands.rs    # Command implementations
-    ├── relay.rs       # `Link` over the relay's USB passthrough + blocking facade
+    ├── device.rs      # `EscDevice` (one method per ICD op) + `Session` host policy
+    ├── relay.rs       # `RelayClient`: EscDevice over postcard-rpc (cobs-serial)
     └── ui.rs          # Terminal UI (dialoguer)
 ```
 
 ## Key Constraints
 
-- `esc-protocol`, `esc-session`, `rtttl-rs` (and the future `esc-config-icd`) must
+- `esc-protocol`, `esc-session`, `esc-config-icd`, `esc-onewire-rp`, `rtttl-rs` must
   remain `#![no_std]`, no alloc; check with
   `cargo build -p <crate> --target thumbv8m.main-none-eabihf`
 - No hardcoded clock rates in firmware code: derive PIO dividers from `clk_sys_freq()`
@@ -85,13 +90,13 @@ crates/
 ## Architecture
 
 ```
-PC (USB Serial) <-> Relay MCU (RP2350) <-> ESC
-                         |
-                         +-- UART 19200 (BLHeli/AM32 bootloader protocol)
+PC (CLI) --USB CDC: postcard-rpc, COBS--> Relay (RP2350) --one-wire 19200--> ESC
+           esc-config-icd requests            esc-session + esc-onewire-rp
 ```
 
-The relay MCU bridges USB to the ESC's one-wire UART (Phase 3 replaces this with
-typed operations running `esc-session` on the relay). The ESC signal pin is GPIO15.
+The relay runs each operation end to end; the CLI holds host policy (which bytes an
+edit may touch, chunking a firmware image). Elle will run the same session and ICD
+types over RTT. USB VID:PID `1209:0001`. The ESC signal pin is GPIO15.
 The ESC enters its bootloader when the signal line is **driven high** at power-on
 (and leaves it if the line is held low for 20 ms).
 
