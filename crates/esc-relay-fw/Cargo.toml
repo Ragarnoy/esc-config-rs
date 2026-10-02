@@ -29,6 +29,17 @@ defmt = { version = "1.0.1" }
 defmt-rtt = { version = "1.1.0" }
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 
+# ESC session and ICD
+esc-session = { path = "../esc-session" }
+esc-protocol = { path = "../esc-protocol" }
+esc-config-icd = { path = "../esc-config-icd", features = ["session"] }
+esc-onewire-rp = { path = "../esc-onewire-rp", features = ["rp235xa", "defmt"] }
+
+# postcard-rpc over CDC (COBS)
+postcard.workspace = true
+postcard-rpc.workspace = true
+serde.workspace = true
+cobs.workspace = true
+
 # Misc
 static_cell = "2"
-fixed = "1.28"
