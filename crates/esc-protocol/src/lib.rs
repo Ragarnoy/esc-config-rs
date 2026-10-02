@@ -27,20 +27,8 @@ pub mod device;
 pub mod ihex;
 pub mod packet;
 
-// MSP and Four-Way protocol support
-pub mod fourway;
-pub mod fourway_session;
-pub mod msp;
-
 pub use crc::{crc16_ibm, crc16_ibm_bytes};
 #[cfg(feature = "std")]
 pub use ihex::{Firmware, LoadError, Segment, load_firmware};
 pub use ihex::{ParseError, Record, RecordData, RecordType, parse_record};
 pub use packet::*;
-
-// MSP protocol re-exports
-pub use msp::{MspCommand, MspError, MspResponse};
-
-// Four-Way protocol re-exports
-pub use fourway::{FourWayAck, FourWayCommand, FourWayError, FourWayMcuType, FourWayResponse};
-pub use fourway_session::{FourWaySession, FourWaySessionError, FourWayState};

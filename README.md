@@ -104,7 +104,7 @@ The relay MCU acts as a USB-to-UART bridge for ESC bootloader communication. The
 
 | Crate | Description | no_std |
 |-------|-------------|--------|
-| `esc-protocol` | BLHeli bootloader protocol, CRC-16, packet builders, AM32 config, melody, MSP, 4-way IF | Yes |
+| `esc-protocol` | BLHeli bootloader protocol, CRC-16, packet builders, AM32 config, melody | Yes |
 | `esc-relay-core` | Generic relay state machine, HAL traits | Yes |
 | `esc-relay-fw` | Embassy firmware for RP2350 | N/A |
 | `rtttl-rs` | RTTTL (Ring Tone Text Transfer Language) parser | Yes |

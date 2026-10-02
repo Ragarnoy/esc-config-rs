@@ -53,10 +53,7 @@ crates/
 │   ├── config.rs      # Config block parsing
 │   ├── am32_config.rs # AM32 configuration settings
 │   ├── ihex.rs        # Intel HEX file parser
-│   ├── melody.rs      # Bluejay melody format + RTTTL conversion
-│   ├── msp.rs         # MSP protocol (Betaflight)
-│   ├── fourway.rs     # Four-Way Interface protocol
-│   └── fourway_session.rs # Four-Way state machine
+│   └── melody.rs      # Bluejay melody format + RTTTL conversion
 ├── esc-relay-core/    # Generic relay MCU logic (no_std)
 │   ├── protocol.rs    # USB<->relay command protocol
 │   ├── state.rs       # Relay state machine
