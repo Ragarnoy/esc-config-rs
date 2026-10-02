@@ -166,9 +166,10 @@ encode several of the errors above (device table, the `FE 00` write-page packet,
 ### Scope answers
 
 - **MSP + four-way**: the CLI does not use them (no `esc_protocol::msp`/`fourway`
-  import), Elle does not need them. Recommend: drop them from `esc-protocol`; git
-  keeps them if Betaflight passthrough comes back.
-- **BLHeli_S**: not exercised anywhere; mark unsupported (F14).
+  import), Elle does not need them. **Done:** dropped from `esc-protocol` (9955559);
+  git keeps them if Betaflight passthrough comes back.
+- **BLHeli_S**: not exercised anywhere. **Done:** unsupported; SiLabs IDs are
+  recognised and refused at connect with a named error (F14).
 - **Flashing**: F051 (`1F`) and 64 KiB parts (`35`) work on paper; G071 is broken
   (F5); DroneCAN bootloaders are refused. No test covers the shift.
 

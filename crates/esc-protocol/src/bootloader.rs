@@ -1,16 +1,16 @@
 //! Bootloader protocol state machine.
 //!
-//! Handles the protocol flow for BLHeli_S and AM32 ESCs.
+//! Handles the protocol flow for AM32 ESCs.
 //! This is pure logic - no I/O. The caller handles actual communication.
 //!
 //! **Supported:**
-//! - BLHeli_S (SIL/Silabs bootloader)
 //! - AM32 (ARM bootloader)
 //!
 //! **NOT Supported:**
+//! - BLHeli_S (SiLabs bootloader; rejected at connect)
 //! - BLHeli_32
 
-use crate::device::{DeviceInfo, classify_device};
+use crate::device::{BootloaderType, DeviceInfo, classify_device};
 use crate::packet::{
     ADDR_CONFIG, build_commit_packet, build_connect_packet, build_disconnect_packet,
     build_erase_page_packet, build_keepalive_packet, build_read_16_packet, build_read_256_packet,
@@ -137,7 +137,7 @@ impl Session {
         }
     }
 
-    /// Get write header packet bytes (long format for BLHeli_S).
+    /// Get write header packet bytes (256-byte Set Buffer).
     ///
     /// Must have address set first. After sending this, send 256 data bytes + 2 CRC bytes.
     /// Note: The ESC does NOT ACK the header - it waits for the full data + CRC before responding.
@@ -356,7 +356,15 @@ impl core::fmt::Display for ProtocolError {
                 )
             }
             Self::UnsupportedDevice { device_id } => {
-                write!(f, "unsupported device: 0x{:04X}", device_id)
+                let kind = match classify_device(*device_id).bootloader {
+                    BootloaderType::Sil => "BLHeli_S (SiLabs) ESC",
+                    BootloaderType::Atm => "ATmega ESC",
+                    BootloaderType::Arm | BootloaderType::Unknown => "device",
+                };
+                write!(
+                    f,
+                    "unsupported {kind}: 0x{device_id:04X} (only AM32 is supported)"
+                )
             }
         }
     }
@@ -450,7 +458,7 @@ mod tests {
         assert!(session.connect_command().is_ok());
 
         // Simulate connection
-        let response = [0x34, 0x37, 0x31, 0x90, 0xF3, 0x06, 0x07, 0x04, 0x30];
+        let response = [0x34, 0x37, 0x31, 0x06, 0x1F, 0x06, 0x06, 0x03, 0x30];
         session.handle_connect_response(&response).unwrap();
 
         // Now connect should fail
@@ -464,13 +472,28 @@ mod tests {
     fn handle_connect_response_success() {
         let mut session = Session::new();
 
-        // Valid response with SIL device ID 0xF390
-        let response = [0x34, 0x37, 0x31, 0x90, 0xF3, 0x06, 0x07, 0x04, 0x30];
+        // Valid response with ARM device ID 0x1F06 (F051, pin PA6)
+        let response = [0x34, 0x37, 0x31, 0x06, 0x1F, 0x06, 0x06, 0x03, 0x30];
         let device = session.handle_connect_response(&response).unwrap();
 
-        assert_eq!(device.device_id, 0xF390);
-        assert_eq!(device.firmware, Some(FirmwareType::BlheliS));
+        assert_eq!(device.device_id, 0x1F06);
+        assert_eq!(device.firmware, Some(FirmwareType::Am32));
         assert_eq!(session.state(), State::Connected);
+    }
+
+    #[test]
+    fn handle_connect_response_blheli_s_refused() {
+        use std::string::ToString;
+
+        let mut session = Session::new();
+
+        // SiLabs device 0xF390 - BLHeli_S, unsupported
+        let response = [0x34, 0x37, 0x31, 0x90, 0xF3, 0x06, 0x07, 0x04, 0x30];
+        let err = session.handle_connect_response(&response).unwrap_err();
+
+        assert_eq!(err, ProtocolError::UnsupportedDevice { device_id: 0xF390 });
+        assert!(err.to_string().contains("BLHeli_S"));
+        assert_eq!(session.state(), State::Disconnected);
     }
 
     #[test]
@@ -502,7 +525,7 @@ mod tests {
         let mut session = Session::new();
 
         // Connect first
-        let response = [0x34, 0x37, 0x31, 0x90, 0xF3, 0x06, 0x07, 0x04, 0x30];
+        let response = [0x34, 0x37, 0x31, 0x06, 0x1F, 0x06, 0x06, 0x03, 0x30];
         session.handle_connect_response(&response).unwrap();
 
         // Set address command should work
@@ -519,7 +542,7 @@ mod tests {
         let mut session = Session::new();
 
         // Connect
-        let response = [0x34, 0x37, 0x31, 0x90, 0xF3, 0x06, 0x07, 0x04, 0x30];
+        let response = [0x34, 0x37, 0x31, 0x06, 0x1F, 0x06, 0x06, 0x03, 0x30];
         session.handle_connect_response(&response).unwrap();
 
         // Read should fail - no address set
@@ -540,7 +563,7 @@ mod tests {
         let mut session = Session::new();
 
         // Connect
-        let response = [0x34, 0x37, 0x31, 0x90, 0xF3, 0x06, 0x07, 0x04, 0x30];
+        let response = [0x34, 0x37, 0x31, 0x06, 0x1F, 0x06, 0x06, 0x03, 0x30];
         session.handle_connect_response(&response).unwrap();
         assert!(session.is_connected());
 
@@ -555,7 +578,7 @@ mod tests {
         let mut session = Session::new();
 
         // Setup: connect and set address
-        let response = [0x34, 0x37, 0x31, 0x90, 0xF3, 0x06, 0x07, 0x04, 0x30];
+        let response = [0x34, 0x37, 0x31, 0x06, 0x1F, 0x06, 0x06, 0x03, 0x30];
         session.handle_connect_response(&response).unwrap();
         session.handle_set_address_response(0x30, 0x7C00).unwrap();
 
@@ -600,7 +623,7 @@ mod tests {
         let mut session = Session::new();
 
         // Connect
-        let response = [0x34, 0x37, 0x31, 0x90, 0xF3, 0x06, 0x07, 0x04, 0x30];
+        let response = [0x34, 0x37, 0x31, 0x06, 0x1F, 0x06, 0x06, 0x03, 0x30];
         session.handle_connect_response(&response).unwrap();
         session.handle_set_address_response(0x30, 0x7C00).unwrap();
 

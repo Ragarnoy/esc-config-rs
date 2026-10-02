@@ -6,7 +6,7 @@ use clap::Parser;
 
 #[derive(Parser)]
 #[command(name = "esc-configurator")]
-#[command(about = "CLI tool for configuring BLHeli_S and AM32 ESCs")]
+#[command(about = "CLI tool for configuring AM32 ESCs")]
 #[command(version)]
 struct Cli {
     /// Serial port device (shortcut for 'config -d')

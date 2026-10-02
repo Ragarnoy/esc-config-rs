@@ -28,7 +28,6 @@ use crate::ui::{
 /// Format device info for display.
 fn format_device(info: DeviceInfo) -> String {
     let firmware_name = match info.firmware {
-        Some(FirmwareType::BlheliS) => "BLHeli_S",
         Some(FirmwareType::Am32) => "AM32",
         None => "Unknown",
     };

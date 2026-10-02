@@ -4,7 +4,8 @@ This file provides guidance for Claude Code when working on this project.
 
 ## Project Overview
 
-ESC configurator toolchain for BLHeli_S and AM32 electronic speed controllers. Does NOT support BLHeli_32.
+ESC configurator toolchain for AM32 electronic speed controllers. Does NOT support BLHeli_S
+(recognised at connect and refused) or BLHeli_32.
 
 ## Current work: revamp and audit
 
@@ -49,7 +50,7 @@ crates/
 │   ├── crc.rs         # CRC-16/IBM implementation
 │   ├── packet.rs      # Protocol packet builders
 │   ├── bootloader.rs  # Bootloader state machine
-│   ├── device.rs      # Device classification (SiLabs, ARM)
+│   ├── device.rs      # Device classification (AM32; SiLabs recognised, refused)
 │   ├── config.rs      # Config block parsing
 │   ├── am32_config.rs # AM32 configuration settings
 │   ├── ihex.rs        # Intel HEX file parser

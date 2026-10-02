@@ -1,13 +1,13 @@
 # esc-config-rs
 
-Command-line tools and libraries for configuring BLHeli_S and AM32 electronic speed controllers.
+Command-line tools and libraries for configuring AM32 electronic speed controllers.
 
 ## Supported Hardware
 
-- BLHeli_S (SiLabs EFM8 based ESCs)
 - AM32 (STM32/AT32 based ESCs)
 
-BLHeli_32 is not supported.
+BLHeli_S (SiLabs EFM8) and BLHeli_32 are not supported. BLHeli_S ESCs are
+recognised at connect and refused.
 
 ## Requirements
 

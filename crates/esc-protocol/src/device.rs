@@ -3,14 +3,15 @@
 //! Classifies ESC devices by bootloader type and firmware.
 //!
 //! **Supported:**
-//! - BLHeli_S (SIL/Silabs EFM8 MCUs)
 //! - AM32 (ARM MCUs - AT32, STM32, etc.)
 //!
 //! **NOT Supported:**
+//! - BLHeli_S (SiLabs EFM8): recognised so the error can name it, never exercised
+//!   on hardware
 //! - BLHeli_32 (will panic)
 //! - ATmega-based ESCs (legacy)
 
-/// Known SIL (Silabs) bootloader device IDs - these are BLHeli_S.
+/// Known SIL (Silabs) bootloader device IDs - these are BLHeli_S (unsupported).
 pub const SIL_DEVICE_IDS: &[u16] = &[0xF310, 0xF330, 0xF410, 0xF390, 0xF850, 0xE8B1, 0xE8B2];
 
 /// Known ARM bootloader device IDs - these could be AM32 or BLHeli_32.
@@ -23,7 +24,7 @@ pub const ATM_DEVICE_IDS: &[u16] = &[0x9307, 0x930A, 0x930F, 0x940B];
 /// Bootloader type based on MCU architecture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootloaderType {
-    /// Silabs EFM8 bootloader (BLHeli_S).
+    /// Silabs EFM8 bootloader (BLHeli_S, unsupported).
     Sil,
     /// ARM Cortex-M bootloader (AM32 or BLHeli_32).
     Arm,
@@ -36,8 +37,6 @@ pub enum BootloaderType {
 /// Supported firmware types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FirmwareType {
-    /// BLHeli_S firmware (runs on Silabs EFM8).
-    BlheliS,
     /// AM32 firmware (runs on ARM MCUs).
     Am32,
 }
@@ -66,13 +65,13 @@ impl DeviceInfo {
     /// - 0x1F (STM32F051): 0x7C00
     /// - 0x2B (STM32G071): 0x7E00
     /// - 0x35 (AT32F421/STM32F3xx): 0xF800
-    /// - Others (SiLabs, GD32, etc.): 0x7C00 (default)
+    /// - Others: 0x7C00 (default)
     pub const fn eeprom_offset(&self) -> u16 {
         let mcu_type = (self.device_id >> 8) as u8;
         match mcu_type {
             0x2B => 0x7E00, // STM32G071
             0x35 => 0xF800, // AT32F421 / STM32F3xx
-            _ => 0x7C00,    // STM32F051, SiLabs, and others
+            _ => 0x7C00,    // STM32F051 and others
         }
     }
 }
@@ -84,12 +83,12 @@ impl DeviceInfo {
 /// This function does NOT panic. Use [`ensure_supported`] to panic on
 /// unsupported devices.
 pub fn classify_device(device_id: u16) -> DeviceInfo {
-    // Check SIL devices first (BLHeli_S)
+    // Check SIL devices first (BLHeli_S, unsupported)
     if SIL_DEVICE_IDS.contains(&device_id) {
         return DeviceInfo {
             device_id,
             bootloader: BootloaderType::Sil,
-            firmware: Some(FirmwareType::BlheliS),
+            firmware: None,
         };
     }
 
@@ -123,17 +122,23 @@ pub fn classify_device(device_id: u16) -> DeviceInfo {
 ///
 /// # Panics
 ///
-/// Panics if the device is not a supported BLHeli_S or AM32 ESC.
+/// Panics if the device is not a supported AM32 ESC.
 pub fn ensure_supported(device_id: u16) -> DeviceInfo {
     let info = classify_device(device_id);
 
     match info.bootloader {
-        BootloaderType::Sil => info,
         BootloaderType::Arm => info,
+        BootloaderType::Sil => {
+            panic!(
+                "Unsupported device: BLHeli_S (SiLabs) ESC (device_id=0x{:04X}). \
+                 Only AM32 is supported.",
+                device_id
+            );
+        }
         BootloaderType::Atm => {
             panic!(
                 "Unsupported device: ATmega-based ESC (device_id=0x{:04X}). \
-                 Only BLHeli_S and AM32 are supported.",
+                 Only AM32 is supported.",
                 device_id
             );
         }
@@ -141,7 +146,7 @@ pub fn ensure_supported(device_id: u16) -> DeviceInfo {
             panic!(
                 "Unknown device (device_id=0x{:04X}). \
                  This might be BLHeli_32 which is NOT supported. \
-                 Only BLHeli_S and AM32 are supported.",
+                 Only AM32 is supported.",
                 device_id
             );
         }
@@ -176,8 +181,8 @@ mod tests {
     fn classify_sil_device() {
         let info = classify_device(0xF390);
         assert_eq!(info.bootloader, BootloaderType::Sil);
-        assert_eq!(info.firmware, Some(FirmwareType::BlheliS));
-        assert!(info.is_supported());
+        assert_eq!(info.firmware, None);
+        assert!(!info.is_supported());
     }
 
     #[test]
@@ -205,9 +210,9 @@ mod tests {
     }
 
     #[test]
-    fn ensure_supported_sil() {
-        let info = ensure_supported(0xE8B1);
-        assert_eq!(info.firmware, Some(FirmwareType::BlheliS));
+    #[should_panic(expected = "BLHeli_S")]
+    fn ensure_supported_panics_on_sil() {
+        ensure_supported(0xE8B1);
     }
 
     #[test]
@@ -262,20 +267,18 @@ mod tests {
         // Other ARM devices default to 0x7C00
         assert!(eeprom(0x3306) == 0x7C00);
         assert!(eeprom(0x4706) == 0x7C00);
-        // SiLabs devices → 0x7C00
-        assert!(eeprom(0xF390) == 0x7C00);
     };
 
     #[test]
-    fn all_known_sil_devices_supported() {
+    fn all_known_sil_devices_unsupported() {
         for &id in SIL_DEVICE_IDS {
             let info = classify_device(id);
+            assert_eq!(info.bootloader, BootloaderType::Sil);
             assert!(
-                info.is_supported(),
-                "SIL device 0x{:04X} should be supported",
+                !info.is_supported(),
+                "SIL device 0x{:04X} should be unsupported",
                 id
             );
-            assert_eq!(info.firmware, Some(FirmwareType::BlheliS));
         }
     }
 

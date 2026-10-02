@@ -10,7 +10,7 @@
 //!
 //! # Memory Layout
 //!
-//! Standard addresses (BLHeli_S/AM32):
+//! Standard addresses (AM32):
 //! - `0x7C00`: Main configuration block (256 bytes)
 //! - `0xEB00`: Timestamp / extra data (16 bytes)
 //! - `0xF7AC`: Device ID / signature (16 bytes)

@@ -266,7 +266,7 @@ pub const fn build_read_128_packet() -> [u8; 4] {
 ///
 /// Format: [FE 00 01 00] + CRC = [FE 00 01 00 30 78]
 ///
-/// Note: This is the BLHeli_S format with explicit page count.
+/// Note: byte 2 = 0x01 means 256 bytes (see docs/REVAMP.md, P4).
 /// For AM32, use `build_write_page_packet()` instead.
 #[inline]
 pub const fn build_write_header_packet() -> [u8; 6] {
