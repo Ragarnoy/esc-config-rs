@@ -352,7 +352,9 @@ fn parse_note(s: &str, default_duration: Duration, default_octave: u8) -> Option
     // Parse optional duration at start
     let mut duration_val = 0u8;
     while pos < bytes.len() && bytes[pos].is_ascii_digit() {
-        duration_val = duration_val.saturating_mul(10).saturating_add(bytes[pos] - b'0');
+        duration_val = duration_val
+            .saturating_mul(10)
+            .saturating_add(bytes[pos] - b'0');
         pos += 1;
     }
 
@@ -429,7 +431,9 @@ fn parse_note(s: &str, default_duration: Duration, default_octave: u8) -> Option
     // Parse optional octave
     let mut octave_val = 0u8;
     while pos < bytes.len() && bytes[pos].is_ascii_digit() {
-        octave_val = octave_val.saturating_mul(10).saturating_add(bytes[pos] - b'0');
+        octave_val = octave_val
+            .saturating_mul(10)
+            .saturating_add(bytes[pos] - b'0');
         pos += 1;
     }
 
@@ -644,8 +648,14 @@ mod tests {
 
     #[test]
     fn missing_colon_error() {
-        assert_eq!(Rtttl::parse("invalid").unwrap_err(), ParseError::MissingColon);
-        assert_eq!(Rtttl::parse("name:settings").unwrap_err(), ParseError::MissingColon);
+        assert_eq!(
+            Rtttl::parse("invalid").unwrap_err(),
+            ParseError::MissingColon
+        );
+        assert_eq!(
+            Rtttl::parse("name:settings").unwrap_err(),
+            ParseError::MissingColon
+        );
     }
 
     #[test]

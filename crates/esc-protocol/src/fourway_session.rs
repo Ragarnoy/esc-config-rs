@@ -39,14 +39,14 @@
 //! ```
 
 use crate::fourway::{
-    build_device_init_flash, build_device_page_erase, build_device_read,
-    build_device_read_eeprom, build_device_reset, build_device_write,
+    FourWayError, FourWayMcuType, build_device_init_flash, build_device_page_erase,
+    build_device_read, build_device_read_eeprom, build_device_reset, build_device_write,
     build_device_write_eeprom, build_interface_exit, parse_fourway_response,
-    parse_init_flash_response, FourWayError, FourWayMcuType,
+    parse_init_flash_response,
 };
 use crate::msp::{
-    build_api_version_packet, build_reboot_packet, build_set_4way_if_packet,
-    parse_4way_if_response, parse_msp_response, MspError,
+    MspError, build_api_version_packet, build_reboot_packet, build_set_4way_if_packet,
+    parse_4way_if_response, parse_msp_response,
 };
 
 /// Four-Way session state.
@@ -375,8 +375,7 @@ impl FourWaySession {
     ) -> Result<Option<FourWayMcuType>, FourWaySessionError> {
         match self.state {
             FourWayState::InPassthrough { .. } => {
-                let info =
-                    parse_init_flash_response(data).map_err(FourWaySessionError::FourWay)?;
+                let info = parse_init_flash_response(data).map_err(FourWaySessionError::FourWay)?;
 
                 self.state = FourWayState::EscConnected {
                     motor_index,
@@ -580,15 +579,30 @@ mod tests {
 
         // Disconnected -> FcConnected
         // Simulate valid API version response
-        let api_response = [0x24, 0x4D, 0x3E, 0x03, 0x68, 0x00, 0x01, 0x2D, 0x03 ^ 0x68 ^ 0x00 ^ 0x01 ^ 0x2D];
+        let api_response = [
+            0x24,
+            0x4D,
+            0x3E,
+            0x03,
+            0x68,
+            0x00,
+            0x01,
+            0x2D,
+            0x03 ^ 0x68 ^ 0x00 ^ 0x01 ^ 0x2D,
+        ];
         session.handle_api_version_response(&api_response).unwrap();
         assert_eq!(session.state(), FourWayState::FcConnected);
 
         // FcConnected -> InPassthrough
         let passthrough_response = [0x24, 0x4D, 0x3E, 0x01, 0xF5, 0x04, 0x01 ^ 0xF5 ^ 0x04];
-        let motor_count = session.handle_passthrough_response(&passthrough_response).unwrap();
+        let motor_count = session
+            .handle_passthrough_response(&passthrough_response)
+            .unwrap();
         assert_eq!(motor_count, 4);
-        assert_eq!(session.state(), FourWayState::InPassthrough { motor_count: 4 });
+        assert_eq!(
+            session.state(),
+            FourWayState::InPassthrough { motor_count: 4 }
+        );
     }
 
     #[test]

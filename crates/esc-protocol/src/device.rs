@@ -11,15 +11,11 @@
 //! - ATmega-based ESCs (legacy)
 
 /// Known SIL (Silabs) bootloader device IDs - these are BLHeli_S.
-pub const SIL_DEVICE_IDS: &[u16] = &[
-    0xF310, 0xF330, 0xF410, 0xF390, 0xF850, 0xE8B1, 0xE8B2,
-];
+pub const SIL_DEVICE_IDS: &[u16] = &[0xF310, 0xF330, 0xF410, 0xF390, 0xF850, 0xE8B1, 0xE8B2];
 
 /// Known ARM bootloader device IDs - these could be AM32 or BLHeli_32.
 /// We assume AM32; BLHeli_32 detection requires firmware inspection.
-pub const ARM_DEVICE_IDS: &[u16] = &[
-    0x1F02, 0x1F06, 0x3306, 0x3406, 0x3506, 0x2B06, 0x4706,
-];
+pub const ARM_DEVICE_IDS: &[u16] = &[0x1F02, 0x1F06, 0x3306, 0x3406, 0x3506, 0x2B06, 0x4706];
 
 /// Known ATM (AtMega) bootloader device IDs - legacy, not supported.
 pub const ATM_DEVICE_IDS: &[u16] = &[0x9307, 0x930A, 0x930F, 0x940B];
@@ -249,7 +245,12 @@ mod tests {
     // eeprom_offset only depends on device_id, so we can construct DeviceInfo directly.
     const _: () = {
         const fn eeprom(device_id: u16) -> u16 {
-            DeviceInfo { device_id, bootloader: BootloaderType::Arm, firmware: None }.eeprom_offset()
+            DeviceInfo {
+                device_id,
+                bootloader: BootloaderType::Arm,
+                firmware: None,
+            }
+            .eeprom_offset()
         }
         // STM32F051 variants → 0x7C00
         assert!(eeprom(0x1F02) == 0x7C00);
@@ -269,7 +270,11 @@ mod tests {
     fn all_known_sil_devices_supported() {
         for &id in SIL_DEVICE_IDS {
             let info = classify_device(id);
-            assert!(info.is_supported(), "SIL device 0x{:04X} should be supported", id);
+            assert!(
+                info.is_supported(),
+                "SIL device 0x{:04X} should be supported",
+                id
+            );
             assert_eq!(info.firmware, Some(FirmwareType::BlheliS));
         }
     }
@@ -278,7 +283,11 @@ mod tests {
     fn all_known_arm_devices_supported() {
         for &id in ARM_DEVICE_IDS {
             let info = classify_device(id);
-            assert!(info.is_supported(), "ARM device 0x{:04X} should be supported", id);
+            assert!(
+                info.is_supported(),
+                "ARM device 0x{:04X} should be supported",
+                id
+            );
             assert_eq!(info.firmware, Some(FirmwareType::Am32));
         }
     }

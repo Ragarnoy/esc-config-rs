@@ -88,8 +88,7 @@ impl Relay {
             .keepalive_command()
             .map_err(|e| anyhow::anyhow!("protocol error: {e}"))?;
 
-        self.send(&packet)
-            .context("failed to send keepalive")?;
+        self.send(&packet).context("failed to send keepalive")?;
 
         let mut response = [0u8; 1];
         self.read_exact(&mut response)
@@ -109,8 +108,7 @@ impl Relay {
             .disconnect_command()
             .map_err(|e| anyhow::anyhow!("protocol error: {e}"))?;
 
-        self.send(&packet)
-            .context("failed to send disconnect")?;
+        self.send(&packet).context("failed to send disconnect")?;
 
         let mut response = [0u8; 1];
         self.read_exact(&mut response)
@@ -130,8 +128,7 @@ impl Relay {
             .set_address_command(address)
             .map_err(|e| anyhow::anyhow!("protocol error: {e}"))?;
 
-        self.send(&packet)
-            .context("failed to send set_address")?;
+        self.send(&packet).context("failed to send set_address")?;
 
         let mut response = [0u8; 1];
         self.read_exact(&mut response)
@@ -153,8 +150,7 @@ impl Relay {
             .read_256_command()
             .map_err(|e| anyhow::anyhow!("protocol error: {e}"))?;
 
-        self.send(&packet)
-            .context("failed to send read command")?;
+        self.send(&packet).context("failed to send read command")?;
 
         // Response: 256 data + 2 CRC + 1 ACK = 259 bytes
         let mut response = [0u8; 259];
@@ -195,8 +191,7 @@ impl Relay {
             .read_16_command()
             .map_err(|e| anyhow::anyhow!("protocol error: {e}"))?;
 
-        self.send(&packet)
-            .context("failed to send read command")?;
+        self.send(&packet).context("failed to send read command")?;
 
         // Response: 16 data + 2 CRC + 1 ACK = 19 bytes
         let mut response = [0u8; 19];
@@ -222,8 +217,7 @@ impl Relay {
         }
 
         let packet = build_read_32_packet();
-        self.send(&packet)
-            .context("failed to send read command")?;
+        self.send(&packet).context("failed to send read command")?;
 
         // Response: 32 data + 2 CRC + 1 ACK = 35 bytes
         let mut response = [0u8; 35];
@@ -232,7 +226,10 @@ impl Relay {
 
         // Validate: check ACK at end
         if response[34] != 0x30 {
-            bail!("read_32 failed: expected ACK 0x30, got 0x{:02X}", response[34]);
+            bail!(
+                "read_32 failed: expected ACK 0x30, got 0x{:02X}",
+                response[34]
+            );
         }
 
         let mut result = [0u8; 32];
@@ -250,8 +247,7 @@ impl Relay {
         }
 
         let packet = build_read_48_packet();
-        self.send(&packet)
-            .context("failed to send read command")?;
+        self.send(&packet).context("failed to send read command")?;
 
         // Response: 48 data + 2 CRC + 1 ACK = 51 bytes
         let mut response = [0u8; 51];
@@ -260,7 +256,10 @@ impl Relay {
 
         // Validate: check ACK at end
         if response[50] != 0x30 {
-            bail!("read_48 failed: expected ACK 0x30, got 0x{:02X}", response[50]);
+            bail!(
+                "read_48 failed: expected ACK 0x30, got 0x{:02X}",
+                response[50]
+            );
         }
 
         let mut result = [0u8; 48];
@@ -278,8 +277,7 @@ impl Relay {
         }
 
         let packet = build_read_128_packet();
-        self.send(&packet)
-            .context("failed to send read command")?;
+        self.send(&packet).context("failed to send read command")?;
 
         // Response: 128 data + 2 CRC + 1 ACK = 131 bytes
         let mut response = [0u8; 131];
@@ -288,7 +286,10 @@ impl Relay {
 
         // Validate: check ACK at end
         if response[130] != 0x30 {
-            bail!("read_128 failed: expected ACK 0x30, got 0x{:02X}", response[130]);
+            bail!(
+                "read_128 failed: expected ACK 0x30, got 0x{:02X}",
+                response[130]
+            );
         }
 
         let mut result = [0u8; 128];
@@ -309,8 +310,7 @@ impl Relay {
         // AM32 write header
         let header: [u8; 3] = [0xFE, 0x00, 0x00];
 
-        self.send(&header)
-            .context("failed to send write header")?;
+        self.send(&header).context("failed to send write header")?;
         self.port.flush().context("failed to flush write header")?;
 
         let mut response = [0u8; 1];
@@ -343,8 +343,7 @@ impl Relay {
             .commit_command()
             .map_err(|e| anyhow::anyhow!("protocol error: {e}"))?;
 
-        self.send(&packet)
-            .context("failed to send commit")?;
+        self.send(&packet).context("failed to send commit")?;
 
         self.port.flush().context("failed to flush commit")?;
 
@@ -369,8 +368,7 @@ impl Relay {
             .erase_page_command()
             .map_err(|e| anyhow::anyhow!("protocol error: {e}"))?;
 
-        self.send(&packet)
-            .context("failed to send erase")?;
+        self.send(&packet).context("failed to send erase")?;
 
         self.port.flush().context("failed to flush erase")?;
 
@@ -393,7 +391,9 @@ impl Relay {
     ///
     /// Returns the MCU-specific eeprom offset (e.g. 0x7C00, 0x7E00, 0xF800).
     fn eeprom_offset(&self) -> Result<u16> {
-        let device = self.session.device()
+        let device = self
+            .session
+            .device()
             .context("not connected: cannot determine eeprom offset")?;
         Ok(device.eeprom_offset())
     }
@@ -459,13 +459,12 @@ impl Relay {
         let data = self.read_32()?;
 
         // Find null terminator or 0xFF (empty flash)
-        let end = data.iter()
+        let end = data
+            .iter()
             .position(|&b| b == 0x00 || b == 0xFF)
             .unwrap_or(data.len());
 
-        let name = core::str::from_utf8(&data[..end])
-            .unwrap_or("")
-            .to_string();
+        let name = core::str::from_utf8(&data[..end]).unwrap_or("").to_string();
         Ok(name)
     }
 
@@ -565,18 +564,23 @@ impl Relay {
         let data_crc = crc16_ibm_bytes(payload);
         combined[12 + write_size..combined_len].copy_from_slice(&data_crc);
 
-        self.send(&combined).context("failed to send eeprom write command")?;
+        self.send(&combined)
+            .context("failed to send eeprom write command")?;
         self.port.flush()?;
 
         // Read responses: set_addr ACK + payload ACK
         let mut response = [0u8; 2];
-        self.read_exact(&mut response).context("failed to read write responses")?;
+        self.read_exact(&mut response)
+            .context("failed to read write responses")?;
 
         if response[0] != 0x30 {
             bail!("set_address failed: 0x{:02X}", response[0]);
         }
         if response[1] != 0x30 {
-            bail!("eeprom write failed: 0x{:02X} (0xC2 = CRC error)", response[1]);
+            bail!(
+                "eeprom write failed: 0x{:02X} (0xC2 = CRC error)",
+                response[1]
+            );
         }
 
         self.commit()?;
@@ -641,7 +645,10 @@ impl Relay {
 
         if response[0] != 0x30 {
             self.port.set_timeout(DEFAULT_TIMEOUT)?;
-            bail!("data write failed: ACK=0x{:02X} (expected 0x30)", response[0]);
+            bail!(
+                "data write failed: ACK=0x{:02X} (expected 0x30)",
+                response[0]
+            );
         }
 
         // 4. Commit flash → ACK

@@ -174,32 +174,32 @@ impl fmt::Display for SignalType {
 // Based on EEprom_t union from AM32 firmware
 mod offsets {
     // Header (0x00-0x04)
-    pub const RESERVED_0: usize = 0x00;        // Was boot_byte in older versions
+    pub const RESERVED_0: usize = 0x00; // Was boot_byte in older versions
     pub const EEPROM_VERSION: usize = 0x01;
-    pub const RESERVED_1: usize = 0x02;        // Was bootloader_version in older versions
+    pub const RESERVED_1: usize = 0x02; // Was bootloader_version in older versions
     pub const FIRMWARE_MAJOR: usize = 0x03;
     pub const FIRMWARE_MINOR: usize = 0x04;
 
     // Throttle/Rate settings (0x05-0x0C)
-    pub const MAX_RATE_OF_CHANGE: usize = 0x05;  // max_ramp: 0.1% to 25% per ms
-    pub const MIN_DUTY: usize = 0x06;            // minimum_duty_cycle: 0.2% to 51%
+    pub const MAX_RATE_OF_CHANGE: usize = 0x05; // max_ramp: 0.1% to 25% per ms
+    pub const MIN_DUTY: usize = 0x06; // minimum_duty_cycle: 0.2% to 51%
     pub const DISABLE_STICK_CALIBRATION: usize = 0x07;
-    pub const ABSOLUTE_VOLTAGE: usize = 0x08;    // absolute_voltage_cutoff: 1-100 in 0.5V
-    pub const CURRENT_LIMIT_P: usize = 0x09;     // current_P: 0-255
-    pub const CURRENT_LIMIT_I: usize = 0x0A;     // current_I: 0-255
-    pub const CURRENT_LIMIT_D: usize = 0x0B;     // current_D: 0-255
+    pub const ABSOLUTE_VOLTAGE: usize = 0x08; // absolute_voltage_cutoff: 1-100 in 0.5V
+    pub const CURRENT_LIMIT_P: usize = 0x09; // current_P: 0-255
+    pub const CURRENT_LIMIT_I: usize = 0x0A; // current_I: 0-255
+    pub const CURRENT_LIMIT_D: usize = 0x0B; // current_D: 0-255
     pub const ACTIVE_BRAKE_STRENGTH: usize = 0x0C; // active_brake_power: 1-5%
 
     // Reserved (0x0D-0x10)
 
     // Motor settings (0x11-0x1B)
-    pub const DIRECTION_REVERSED: usize = 0x11;  // dir_reversed
-    pub const BIDIRECTIONAL: usize = 0x12;       // bi_direction
-    pub const SINUSOIDAL_STARTUP: usize = 0x13;  // use_sine_start
-    pub const COMPLEMENTARY_PWM: usize = 0x14;   // comp_pwm
-    pub const VARIABLE_PWM: usize = 0x15;        // variable_pwm
+    pub const DIRECTION_REVERSED: usize = 0x11; // dir_reversed
+    pub const BIDIRECTIONAL: usize = 0x12; // bi_direction
+    pub const SINUSOIDAL_STARTUP: usize = 0x13; // use_sine_start
+    pub const COMPLEMENTARY_PWM: usize = 0x14; // comp_pwm
+    pub const VARIABLE_PWM: usize = 0x15; // variable_pwm
     pub const STUCK_ROTOR_PROTECTION: usize = 0x16;
-    pub const TIMING_ADVANCE: usize = 0x17;      // advance_level
+    pub const TIMING_ADVANCE: usize = 0x17; // advance_level
     pub const PWM_FREQUENCY: usize = 0x18;
     pub const STARTUP_POWER: usize = 0x19;
     pub const MOTOR_KV: usize = 0x1A;
@@ -214,34 +214,34 @@ mod offsets {
     pub const TELEMETRY_ON_INTERVAL: usize = 0x1F; // telemetry_on_interval
 
     // Servo/PWM input (0x20-0x23)
-    pub const SERVO_LOW: usize = 0x20;           // servo.low_threshold
-    pub const SERVO_HIGH: usize = 0x21;          // servo.high_threshold
-    pub const SERVO_NEUTRAL: usize = 0x22;       // servo.neutral
-    pub const SERVO_DEADBAND: usize = 0x23;      // servo.dead_band
+    pub const SERVO_LOW: usize = 0x20; // servo.low_threshold
+    pub const SERVO_HIGH: usize = 0x21; // servo.high_threshold
+    pub const SERVO_NEUTRAL: usize = 0x22; // servo.neutral
+    pub const SERVO_DEADBAND: usize = 0x23; // servo.dead_band
 
     // Low voltage cutoff (0x24-0x25)
     pub const LOW_VOLTAGE_CUTOFF: usize = 0x24;
-    pub const LVC_THRESHOLD: usize = 0x25;       // low_cell_volt_cutoff
+    pub const LVC_THRESHOLD: usize = 0x25; // low_cell_volt_cutoff
 
     // Input modes (0x26-0x27)
-    pub const RC_CAR_REVERSING: usize = 0x26;    // rc_car_reverse
+    pub const RC_CAR_REVERSING: usize = 0x26; // rc_car_reverse
     pub const USE_HALL_SENSORS: usize = 0x27;
 
     // Sine mode (0x28)
-    pub const SINE_MODE_RANGE: usize = 0x28;     // sine_mode_changeover_thottle_level
+    pub const SINE_MODE_RANGE: usize = 0x28; // sine_mode_changeover_thottle_level
 
     // Brake strengths (0x29-0x2A)
     pub const DRAG_BRAKE_STRENGTH: usize = 0x29;
     pub const RUNNING_BRAKE_STRENGTH: usize = 0x2A; // driving_brake_strength
 
     // Limits (0x2B-0x2C)
-    pub const TEMPERATURE_LIMIT: usize = 0x2B;   // limits.temperature
-    pub const CURRENT_LIMIT: usize = 0x2C;       // limits.current
+    pub const TEMPERATURE_LIMIT: usize = 0x2B; // limits.temperature
+    pub const CURRENT_LIMIT: usize = 0x2C; // limits.current
 
     // Additional settings (0x2D-0x2F)
     pub const SINE_MODE_POWER: usize = 0x2D;
-    pub const INPUT_TYPE: usize = 0x2E;          // input_type (was signal_type)
-    pub const AUTO_TIMING: usize = 0x2F;         // auto_advance
+    pub const INPUT_TYPE: usize = 0x2E; // input_type (was signal_type)
+    pub const AUTO_TIMING: usize = 0x2F; // auto_advance
 
     // Tune/Melody (0x30-0xAF) - 128 bytes
     #[allow(dead_code)]
@@ -298,7 +298,7 @@ impl Am32Config {
 
         // Throttle/Rate settings
         config.set_max_rate_of_change(100); // 10.0 display
-        config.set_min_duty(10);            // 5% display
+        config.set_min_duty(10); // 5% display
         config.set_disable_stick_calibration(false);
         config.set_absolute_voltage(0);
         config.set_current_limit_p(50);
@@ -331,9 +331,9 @@ impl Am32Config {
         config.set_telemetry_30ms(false);
 
         // Servo input - these are only used in Servo mode
-        config.set_servo_low(125);      // 1000µs
-        config.set_servo_high(125);     // 2000µs
-        config.set_servo_neutral(126);  // 1500µs
+        config.set_servo_low(125); // 1000µs
+        config.set_servo_high(125); // 2000µs
+        config.set_servo_neutral(126); // 1500µs
         config.set_servo_deadband(50);
 
         // Signal type - CRITICAL: Auto to accept DShot
@@ -341,9 +341,9 @@ impl Am32Config {
 
         // Limits
         config.set_low_voltage_cutoff(false);
-        config.set_lvc_threshold(100);  // 3.5V
+        config.set_lvc_threshold(100); // 3.5V
         config.set_temperature_limit(142); // Disabled
-        config.set_current_limit(101);  // Disabled
+        config.set_current_limit(101); // Disabled
 
         // Input modes
         config.set_rc_car_reversing(false);
@@ -910,55 +910,153 @@ impl fmt::Display for Am32Config {
 
         writeln!(f, "Throttle/Rate Settings")?;
         writeln!(f, "----------------------")?;
-        writeln!(f, "Max Rate of Change:  {} (display: {:.1})", self.max_rate_of_change(), self.max_rate_of_change_display())?;
-        writeln!(f, "Min Duty:            {} (display: {:.1}%)", self.min_duty(), self.min_duty_percent())?;
-        writeln!(f, "Stick Calib Disabled:{}", if self.disable_stick_calibration() { " Yes" } else { " No" })?;
+        writeln!(
+            f,
+            "Max Rate of Change:  {} (display: {:.1})",
+            self.max_rate_of_change(),
+            self.max_rate_of_change_display()
+        )?;
+        writeln!(
+            f,
+            "Min Duty:            {} (display: {:.1}%)",
+            self.min_duty(),
+            self.min_duty_percent()
+        )?;
+        writeln!(
+            f,
+            "Stick Calib Disabled:{}",
+            if self.disable_stick_calibration() {
+                " Yes"
+            } else {
+                " No"
+            }
+        )?;
         writeln!(f)?;
 
         writeln!(f, "Current Limit PID")?;
         writeln!(f, "-----------------")?;
-        writeln!(f, "P Gain:              {} (display: {})", self.current_limit_p(), self.current_limit_p_display())?;
+        writeln!(
+            f,
+            "P Gain:              {} (display: {})",
+            self.current_limit_p(),
+            self.current_limit_p_display()
+        )?;
         writeln!(f, "I Gain:              {}", self.current_limit_i())?;
-        writeln!(f, "D Gain:              {} (display: {})", self.current_limit_d(), self.current_limit_d_display())?;
+        writeln!(
+            f,
+            "D Gain:              {} (display: {})",
+            self.current_limit_d(),
+            self.current_limit_d_display()
+        )?;
         writeln!(f)?;
 
         writeln!(f, "Motor Settings")?;
         writeln!(f, "--------------")?;
-        writeln!(f, "Direction Reversed:  {}", if self.direction_reversed() { "Yes" } else { "No" })?;
-        writeln!(f, "Bidirectional (3D):  {}", if self.bidirectional() { "Yes" } else { "No" })?;
-        writeln!(f, "Motor KV:            {} (raw: {})", self.motor_kv(), self.motor_kv_raw())?;
+        writeln!(
+            f,
+            "Direction Reversed:  {}",
+            if self.direction_reversed() {
+                "Yes"
+            } else {
+                "No"
+            }
+        )?;
+        writeln!(
+            f,
+            "Bidirectional (3D):  {}",
+            if self.bidirectional() { "Yes" } else { "No" }
+        )?;
+        writeln!(
+            f,
+            "Motor KV:            {} (raw: {})",
+            self.motor_kv(),
+            self.motor_kv_raw()
+        )?;
         writeln!(f, "Motor Poles:         {}", self.motor_poles())?;
         writeln!(f, "Timing Advance:      {}", self.timing_advance())?;
-        writeln!(f, "Auto Timing:         {}", if self.auto_timing() { "Yes" } else { "No" })?;
+        writeln!(
+            f,
+            "Auto Timing:         {}",
+            if self.auto_timing() { "Yes" } else { "No" }
+        )?;
         writeln!(f)?;
 
         writeln!(f, "PWM Settings")?;
         writeln!(f, "------------")?;
         writeln!(f, "PWM Frequency:       {} kHz", self.pwm_frequency_khz())?;
-        writeln!(f, "Complementary PWM:   {}", if self.complementary_pwm() { "Yes" } else { "No" })?;
+        writeln!(
+            f,
+            "Complementary PWM:   {}",
+            if self.complementary_pwm() {
+                "Yes"
+            } else {
+                "No"
+            }
+        )?;
         writeln!(f, "Variable PWM:        {}", self.variable_pwm_mode())?;
         writeln!(f)?;
 
         writeln!(f, "Startup & Protection")?;
         writeln!(f, "--------------------")?;
         writeln!(f, "Startup Power:       {}%", self.startup_power())?;
-        writeln!(f, "Sinusoidal Startup:  {}", if self.sinusoidal_startup() { "Yes" } else { "No" })?;
-        writeln!(f, "Stuck Rotor Prot.:   {}", if self.stuck_rotor_protection() { "Yes" } else { "No" })?;
-        writeln!(f, "Stall Protection:    {}", if self.stall_protection() { "Yes" } else { "No" })?;
+        writeln!(
+            f,
+            "Sinusoidal Startup:  {}",
+            if self.sinusoidal_startup() {
+                "Yes"
+            } else {
+                "No"
+            }
+        )?;
+        writeln!(
+            f,
+            "Stuck Rotor Prot.:   {}",
+            if self.stuck_rotor_protection() {
+                "Yes"
+            } else {
+                "No"
+            }
+        )?;
+        writeln!(
+            f,
+            "Stall Protection:    {}",
+            if self.stall_protection() { "Yes" } else { "No" }
+        )?;
         writeln!(f)?;
 
         writeln!(f, "Braking")?;
         writeln!(f, "-------")?;
         writeln!(f, "Brake Mode:          {}", self.brake_mode())?;
-        writeln!(f, "Active Brake:        {}/10", self.active_brake_strength())?;
+        writeln!(
+            f,
+            "Active Brake:        {}/10",
+            self.active_brake_strength()
+        )?;
         writeln!(f, "Drag Brake:          {}/10", self.drag_brake_strength())?;
-        writeln!(f, "Running Brake:       {}/10", self.running_brake_strength())?;
+        writeln!(
+            f,
+            "Running Brake:       {}/10",
+            self.running_brake_strength()
+        )?;
         writeln!(f)?;
 
         writeln!(f, "Limits")?;
         writeln!(f, "------")?;
-        writeln!(f, "LVC Enabled:         {}", if self.low_voltage_cutoff() { "Yes" } else { "No" })?;
-        writeln!(f, "LVC Threshold:       {:.2}V (raw: {})", self.lvc_threshold_volts(), self.lvc_threshold())?;
+        writeln!(
+            f,
+            "LVC Enabled:         {}",
+            if self.low_voltage_cutoff() {
+                "Yes"
+            } else {
+                "No"
+            }
+        )?;
+        writeln!(
+            f,
+            "LVC Threshold:       {:.2}V (raw: {})",
+            self.lvc_threshold_volts(),
+            self.lvc_threshold()
+        )?;
         match self.temperature_limit_celsius() {
             Some(t) => writeln!(f, "Temperature Limit:   {}°C", t)?,
             None => writeln!(f, "Temperature Limit:   Disabled")?,
@@ -972,9 +1070,24 @@ impl fmt::Display for Am32Config {
         writeln!(f, "Servo / PWM Input")?;
         writeln!(f, "-----------------")?;
         writeln!(f, "Signal Type:         {}", self.signal_type())?;
-        writeln!(f, "Servo Low:           {} μs (raw: {})", self.servo_low_us(), self.servo_low())?;
-        writeln!(f, "Servo High:          {} μs (raw: {})", self.servo_high_us(), self.servo_high())?;
-        writeln!(f, "Servo Neutral:       {} μs (raw: {})", self.servo_neutral_us(), self.servo_neutral())?;
+        writeln!(
+            f,
+            "Servo Low:           {} μs (raw: {})",
+            self.servo_low_us(),
+            self.servo_low()
+        )?;
+        writeln!(
+            f,
+            "Servo High:          {} μs (raw: {})",
+            self.servo_high_us(),
+            self.servo_high()
+        )?;
+        writeln!(
+            f,
+            "Servo Neutral:       {} μs (raw: {})",
+            self.servo_neutral_us(),
+            self.servo_neutral()
+        )?;
         writeln!(f, "Servo Deadband:      {}", self.servo_deadband())?;
         writeln!(f)?;
 
@@ -987,9 +1100,21 @@ impl fmt::Display for Am32Config {
         writeln!(f, "Other")?;
         writeln!(f, "-----")?;
         writeln!(f, "Beep Volume:         {}/11", self.beep_volume())?;
-        writeln!(f, "30ms Telemetry:      {}", if self.telemetry_30ms() { "Yes" } else { "No" })?;
-        writeln!(f, "RC Car Reversing:    {}", if self.rc_car_reversing() { "Yes" } else { "No" })?;
-        writeln!(f, "Use Hall Sensors:    {}", if self.use_hall_sensors() { "Yes" } else { "No" })?;
+        writeln!(
+            f,
+            "30ms Telemetry:      {}",
+            if self.telemetry_30ms() { "Yes" } else { "No" }
+        )?;
+        writeln!(
+            f,
+            "RC Car Reversing:    {}",
+            if self.rc_car_reversing() { "Yes" } else { "No" }
+        )?;
+        writeln!(
+            f,
+            "Use Hall Sensors:    {}",
+            if self.use_hall_sensors() { "Yes" } else { "No" }
+        )?;
         Ok(())
     }
 }
@@ -1222,7 +1347,9 @@ impl Setting {
             // Input modes
             Self::RcCarReversing => "RC car reversing mode (on/off)",
             Self::UseHallSensors => "Use Hall sensors (on/off)",
-            Self::SignalType => "Signal type (0=auto, 1=dshot, 2=servo, 3=serial, 4=edt+arm, 5=dronecan)",
+            Self::SignalType => {
+                "Signal type (0=auto, 1=dshot, 2=servo, 3=serial, 4=edt+arm, 5=dronecan)"
+            }
             // Sine mode
             Self::SineModeRange => "Sine mode range percent (5-25)",
             Self::SineModePower => "Sine mode power (1-10)",
@@ -1429,7 +1556,9 @@ pub fn apply_setting(
         Setting::SignalType => {
             let v: u8 = value.parse().map_err(|_| "expected 0-5")?;
             if v > 5 {
-                return Err("signal type must be 0-5 (0=auto, 1=dshot, 2=servo, 3=serial, 4=edt+arm, 5=dronecan)");
+                return Err(
+                    "signal type must be 0-5 (0=auto, 1=dshot, 2=servo, 3=serial, 4=edt+arm, 5=dronecan)",
+                );
             }
             config.set_signal_type(SignalType::from_byte(v));
         }
@@ -1790,7 +1919,10 @@ mod tests {
 
     #[test]
     fn setting_from_str() {
-        assert_eq!(Setting::parse("direction"), Some(Setting::DirectionReversed));
+        assert_eq!(
+            Setting::parse("direction"),
+            Some(Setting::DirectionReversed)
+        );
         assert_eq!(Setting::parse("motor-kv"), Some(Setting::MotorKv));
         assert_eq!(Setting::parse("pwm_freq"), Some(Setting::PwmFrequency));
         assert_eq!(Setting::parse("unknown"), None);
@@ -1949,7 +2081,8 @@ mod tests {
         assert!(toml_str.contains("bidirectional = true"));
 
         // Deserialize back
-        let data2: Am32ConfigData = toml::from_str(&toml_str).expect("Failed to deserialize from TOML");
+        let data2: Am32ConfigData =
+            toml::from_str(&toml_str).expect("Failed to deserialize from TOML");
         let config2 = Am32Config::from(&data2);
 
         // Verify all fields match
@@ -1989,7 +2122,8 @@ motor_poles = 12
 direction_reversed = true
 "#;
 
-        let data: Am32ConfigData = toml::from_str(partial_toml).expect("Failed to deserialize partial TOML");
+        let data: Am32ConfigData =
+            toml::from_str(partial_toml).expect("Failed to deserialize partial TOML");
         let config = Am32Config::from(&data);
 
         // Specified values should be set

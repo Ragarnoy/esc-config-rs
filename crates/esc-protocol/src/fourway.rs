@@ -413,8 +413,8 @@ pub fn parse_fourway_response(data: &[u8]) -> Result<FourWayResponse<'_>, FourWa
 
     // ACK is at len-3
     let ack_byte = data[data.len() - 3];
-    let ack = FourWayAck::from_byte(ack_byte)
-        .ok_or(FourWayError::InvalidAck { value: ack_byte })?;
+    let ack =
+        FourWayAck::from_byte(ack_byte).ok_or(FourWayError::InvalidAck { value: ack_byte })?;
 
     let command = data[0];
     let param = data[1];
@@ -497,8 +497,14 @@ mod tests {
 
     #[test]
     fn command_from_byte() {
-        assert_eq!(FourWayCommand::from_byte(0x30), Some(FourWayCommand::InterfaceTestAlive));
-        assert_eq!(FourWayCommand::from_byte(0x37), Some(FourWayCommand::DeviceInitFlash));
+        assert_eq!(
+            FourWayCommand::from_byte(0x30),
+            Some(FourWayCommand::InterfaceTestAlive)
+        );
+        assert_eq!(
+            FourWayCommand::from_byte(0x37),
+            Some(FourWayCommand::DeviceInitFlash)
+        );
         assert_eq!(FourWayCommand::from_byte(0x99), None);
     }
 
@@ -545,7 +551,7 @@ mod tests {
     fn build_read_packet() {
         let packet = build_device_read(48, 0x7C00);
         assert_eq!(packet[0], 0x3A); // CMD = DeviceRead
-        assert_eq!(packet[1], 48);   // Size
+        assert_eq!(packet[1], 48); // Size
         assert_eq!(packet[2], 0x7C); // Addr high
         assert_eq!(packet[3], 0x00); // Addr low
     }
@@ -558,7 +564,7 @@ mod tests {
 
         assert_eq!(len, 10); // 6 + 4 data bytes
         assert_eq!(buffer[0], 0x3B); // CMD = DeviceWrite
-        assert_eq!(buffer[1], 4);    // Size
+        assert_eq!(buffer[1], 4); // Size
         assert_eq!(buffer[2], 0x7C); // Addr high
         assert_eq!(buffer[3], 0x00); // Addr low
         assert_eq!(&buffer[4..8], &data);
@@ -595,12 +601,18 @@ mod tests {
     #[test]
     fn parse_response_crc_error() {
         let response = vec![0x3A, 48, 0x7C, 0x00, 0x00, 0xFF, 0xFF]; // Bad CRC
-        assert_eq!(parse_fourway_response(&response), Err(FourWayError::CrcMismatch));
+        assert_eq!(
+            parse_fourway_response(&response),
+            Err(FourWayError::CrcMismatch)
+        );
     }
 
     #[test]
     fn parse_response_too_short() {
         let response = vec![0x3A, 48, 0x7C, 0x00, 0x00]; // Missing CRC
-        assert_eq!(parse_fourway_response(&response), Err(FourWayError::TooShort));
+        assert_eq!(
+            parse_fourway_response(&response),
+            Err(FourWayError::TooShort)
+        );
     }
 }

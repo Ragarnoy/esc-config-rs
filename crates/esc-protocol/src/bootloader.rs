@@ -10,12 +10,12 @@
 //! **NOT Supported:**
 //! - BLHeli_32
 
-use crate::device::{classify_device, DeviceInfo};
+use crate::device::{DeviceInfo, classify_device};
 use crate::packet::{
-    build_commit_packet, build_connect_packet, build_disconnect_packet, build_erase_page_packet,
-    build_keepalive_packet, build_read_16_packet, build_read_256_packet, build_set_address_packet,
-    build_write_header_packet, build_write_page_packet, compute_data_crc, is_ack, is_keepalive_ack,
-    parse_connect_response, ADDR_CONFIG,
+    ADDR_CONFIG, build_commit_packet, build_connect_packet, build_disconnect_packet,
+    build_erase_page_packet, build_keepalive_packet, build_read_16_packet, build_read_256_packet,
+    build_set_address_packet, build_write_header_packet, build_write_page_packet, compute_data_crc,
+    is_ack, is_keepalive_ack, parse_connect_response,
 };
 
 /// Protocol state.
@@ -276,7 +276,11 @@ impl Session {
     ///
     /// Returns the data portion (without trailing CRC and ACK).
     /// For 256-byte read: expects 256 data + 2 CRC + 1 ACK = 259 bytes.
-    pub fn validate_read_response<'a>(&self, data: &'a [u8], expected_len: usize) -> Result<&'a [u8], ProtocolError> {
+    pub fn validate_read_response<'a>(
+        &self,
+        data: &'a [u8],
+        expected_len: usize,
+    ) -> Result<&'a [u8], ProtocolError> {
         // Expected: data + 2 CRC + 1 ACK
         let total_expected = expected_len + 3;
 
@@ -332,7 +336,11 @@ impl core::fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::InvalidState { expected, actual } => {
-                write!(f, "invalid state: expected {:?}, got {:?}", expected, actual)
+                write!(
+                    f,
+                    "invalid state: expected {:?}, got {:?}",
+                    expected, actual
+                )
             }
             Self::NotConnected => write!(f, "not connected"),
             Self::AddressNotSet => write!(f, "address not set"),
@@ -341,7 +349,11 @@ impl core::fmt::Display for ProtocolError {
                 write!(f, "unexpected response: 0x{:02X}", byte)
             }
             Self::ResponseTooShort { expected, actual } => {
-                write!(f, "response too short: expected {}, got {}", expected, actual)
+                write!(
+                    f,
+                    "response too short: expected {}, got {}",
+                    expected, actual
+                )
             }
             Self::UnsupportedDevice { device_id } => {
                 write!(f, "unsupported device: 0x{:04X}", device_id)

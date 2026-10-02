@@ -252,7 +252,8 @@ async fn main() -> anyhow::Result<()> {
             commands::export_config(&device, &output)?;
         }
         Commands::Import { device, input } => {
-            if !ui::confirm_operation("This will overwrite ESC configuration from TOML. Continue?")? {
+            if !ui::confirm_operation("This will overwrite ESC configuration from TOML. Continue?")?
+            {
                 println!("Aborted.");
                 return Ok(());
             }

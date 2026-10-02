@@ -18,9 +18,7 @@ pub struct OneWireUart<'d, PIO: Instance, const SM_TX: usize, const SM_RX: usize
     pin: Pin<'d, PIO>,
 }
 
-impl<'d, PIO: Instance, const SM_TX: usize, const SM_RX: usize>
-    OneWireUart<'d, PIO, SM_TX, SM_RX>
-{
+impl<'d, PIO: Instance, const SM_TX: usize, const SM_RX: usize> OneWireUart<'d, PIO, SM_TX, SM_RX> {
     /// Create a new single-wire UART on the given pin (takes ownership of Peri).
     pub fn new(
         pio: &mut Common<'d, PIO>,
@@ -55,14 +53,14 @@ impl<'d, PIO: Instance, const SM_TX: usize, const SM_RX: usize>
         let tx_prg = pio_asm!(
             ".side_set 1 opt",
             // Wait for data in FIFO, then send start bit
-            "pull block      side 1",      // Wait for data, keep line high (idle)
-            "set x, 7        side 0 [6]",  // Start bit low, 7 cycles
-            "nop                   [6]",   // 7 more cycles = 14 total for start bit
+            "pull block      side 1", // Wait for data, keep line high (idle)
+            "set x, 7        side 0 [6]", // Start bit low, 7 cycles
+            "nop                   [6]", // 7 more cycles = 14 total for start bit
             "bitloop:",
-            "out pins, 1          [6]",    // Output data bit (7 cycles)
-            "jmp x--, bitloop     [6]",    // Loop for 8 bits (7 cycles) = 14 cycles/bit
-            "nop             side 1 [6]",  // Stop bit high, 7 cycles
-            "nop                   [6]",   // 7 more cycles = 14 total for stop bit
+            "out pins, 1          [6]",   // Output data bit (7 cycles)
+            "jmp x--, bitloop     [6]",   // Loop for 8 bits (7 cycles) = 14 cycles/bit
+            "nop             side 1 [6]", // Stop bit high, 7 cycles
+            "nop                   [6]",  // 7 more cycles = 14 total for stop bit
         );
 
         // RX program: sample 8 bits after detecting start bit
@@ -216,20 +214,15 @@ impl<'d, PIO: Instance, const SM_TX: usize, const SM_RX: usize>
     /// so a 3ms gap reliably indicates end of response.
     ///
     /// Returns the number of bytes read.
-    pub async fn read_with_timeout(
-        &mut self,
-        buf: &mut [u8],
-        timeout_ms: u64,
-    ) -> usize {
-        use embassy_futures::select::{select, Either};
+    pub async fn read_with_timeout(&mut self, buf: &mut [u8], timeout_ms: u64) -> usize {
+        use embassy_futures::select::{Either, select};
         use embassy_time::{Duration, Timer};
 
         /// Inter-byte timeout: 3ms is ~6x the byte time at 19200 baud.
         const INTER_BYTE_TIMEOUT_MS: u64 = 3;
 
         let mut count = 0;
-        let initial_deadline =
-            embassy_time::Instant::now() + Duration::from_millis(timeout_ms);
+        let initial_deadline = embassy_time::Instant::now() + Duration::from_millis(timeout_ms);
 
         while count < buf.len() {
             let timeout = if count == 0 {
@@ -266,7 +259,7 @@ impl<'d, PIO: Instance, const SM_TX: usize, const SM_RX: usize>
         n: usize,
         timeout_ms: u64,
     ) -> usize {
-        use embassy_futures::select::{select, Either};
+        use embassy_futures::select::{Either, select};
         use embassy_time::{Duration, Timer};
 
         let mut count = 0;

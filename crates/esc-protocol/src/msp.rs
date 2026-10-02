@@ -70,9 +70,9 @@ pub fn msp_checksum(data: &[u8]) -> u8 {
 pub const fn build_api_version_packet() -> [u8; 6] {
     [
         0x24, 0x4D, 0x3C, // "$M<"
-        0x00,             // LEN = 0
-        0x68,             // CMD = ApiVersion
-        0x68,             // CHECKSUM = 0x00 ^ 0x68
+        0x00, // LEN = 0
+        0x68, // CMD = ApiVersion
+        0x68, // CHECKSUM = 0x00 ^ 0x68
     ]
 }
 
@@ -83,9 +83,9 @@ pub const fn build_api_version_packet() -> [u8; 6] {
 pub const fn build_set_4way_if_packet() -> [u8; 6] {
     [
         0x24, 0x4D, 0x3C, // "$M<"
-        0x00,             // LEN = 0
-        0xF5,             // CMD = Set4WayIf
-        0xF5,             // CHECKSUM = 0x00 ^ 0xF5
+        0x00, // LEN = 0
+        0xF5, // CMD = Set4WayIf
+        0xF5, // CHECKSUM = 0x00 ^ 0xF5
     ]
 }
 
@@ -99,9 +99,9 @@ pub const fn build_set_4way_if_packet() -> [u8; 6] {
 pub const fn build_reboot_packet() -> [u8; 6] {
     [
         0x24, 0x4D, 0x3C, // "$M<"
-        0x00,             // LEN = 0
-        0x44,             // CMD = SetReboot
-        0x44,             // CHECKSUM = 0x00 ^ 0x44
+        0x00, // LEN = 0
+        0x44, // CMD = SetReboot
+        0x44, // CHECKSUM = 0x00 ^ 0x44
     ]
 }
 
@@ -164,7 +164,11 @@ impl core::fmt::Display for MspError {
             Self::ChecksumMismatch => write!(f, "checksum mismatch"),
             Self::IncompletePayload => write!(f, "incomplete payload"),
             Self::CommandMismatch { expected, actual } => {
-                write!(f, "command mismatch: expected 0x{:02X}, got 0x{:02X}", expected, actual)
+                write!(
+                    f,
+                    "command mismatch: expected 0x{:02X}, got 0x{:02X}",
+                    expected, actual
+                )
             }
         }
     }
@@ -201,7 +205,10 @@ pub fn parse_msp_response(data: &[u8]) -> Result<MspResponse<'_>, MspError> {
 
     let payload = &data[5..5 + len];
 
-    Ok(MspResponse { command: cmd, payload })
+    Ok(MspResponse {
+        command: cmd,
+        payload,
+    })
 }
 
 /// Parse MSP_SET_4WAY_IF response to extract motor count.
@@ -241,7 +248,11 @@ pub fn parse_api_version_response(data: &[u8]) -> Result<(u8, u8, u8), MspError>
         return Err(MspError::IncompletePayload);
     }
 
-    Ok((response.payload[0], response.payload[1], response.payload[2]))
+    Ok((
+        response.payload[0],
+        response.payload[1],
+        response.payload[2],
+    ))
 }
 
 #[cfg(test)]

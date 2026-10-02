@@ -48,7 +48,11 @@ impl ConfigBlock {
     /// # Panics
     /// Panics if data length is not exactly 256 bytes.
     pub fn from_bytes(data: &[u8]) -> Self {
-        assert_eq!(data.len(), CONFIG_BLOCK_SIZE, "config block must be 256 bytes");
+        assert_eq!(
+            data.len(),
+            CONFIG_BLOCK_SIZE,
+            "config block must be 256 bytes"
+        );
         let mut block = Self {
             data: [0u8; CONFIG_BLOCK_SIZE],
         };
@@ -104,8 +108,14 @@ impl core::fmt::Debug for ConfigBlock {
         write!(
             f,
             "ConfigBlock {{ {:02X} {:02X} {:02X} {:02X} ... {:02X} {:02X} {:02X} {:02X} }}",
-            self.data[0], self.data[1], self.data[2], self.data[3],
-            self.data[252], self.data[253], self.data[254], self.data[255]
+            self.data[0],
+            self.data[1],
+            self.data[2],
+            self.data[3],
+            self.data[252],
+            self.data[253],
+            self.data[254],
+            self.data[255]
         )
     }
 }
@@ -189,7 +199,8 @@ pub fn parse_config_response(response: &[u8]) -> Option<ConfigBlock> {
 
     // Extract parts
     let data = &response[..CONFIG_BLOCK_SIZE];
-    let crc_received = u16::from_le_bytes([response[CONFIG_BLOCK_SIZE], response[CONFIG_BLOCK_SIZE + 1]]);
+    let crc_received =
+        u16::from_le_bytes([response[CONFIG_BLOCK_SIZE], response[CONFIG_BLOCK_SIZE + 1]]);
     let ack = response[CONFIG_BLOCK_SIZE + 2];
 
     // Verify ACK

@@ -7,7 +7,11 @@ use std::path::Path;
 
 /// Find firmware hex files in the project root.
 fn find_firmware_files() -> Vec<String> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
 
     let mut files = Vec::new();
     if let Ok(entries) = fs::read_dir(root) {
@@ -40,7 +44,10 @@ fn test_real_firmware_parsing() {
         let binary = firmware.to_binary();
 
         // Basic validation
-        assert!(!firmware.segments.is_empty(), "firmware should have segments");
+        assert!(
+            !firmware.segments.is_empty(),
+            "firmware should have segments"
+        );
         assert!(!binary.is_empty(), "binary should not be empty");
 
         println!("  Segments: {}", firmware.segments.len());
@@ -48,7 +55,11 @@ fn test_real_firmware_parsing() {
         println!("  Binary size (with gaps): {} bytes", binary.len());
 
         if let Some(min) = firmware.min_address() {
-            println!("  Address range: 0x{:08X} - 0x{:08X}", min, firmware.max_address().unwrap());
+            println!(
+                "  Address range: 0x{:08X} - 0x{:08X}",
+                min,
+                firmware.max_address().unwrap()
+            );
 
             // AM32 firmware should start at 0x08001000 or 0x1000
             let offset = min & 0xFFFF;
@@ -116,15 +127,25 @@ fn test_firmware_verification_simulation() {
         let chunk_size = 256;
         let mut mismatches = 0;
 
-        for (i, (exp_chunk, act_chunk)) in expected.chunks(chunk_size).zip(actual.chunks(chunk_size)).enumerate() {
+        for (i, (exp_chunk, act_chunk)) in expected
+            .chunks(chunk_size)
+            .zip(actual.chunks(chunk_size))
+            .enumerate()
+        {
             if exp_chunk != act_chunk {
                 mismatches += 1;
                 println!("  Mismatch at chunk {}", i);
             }
         }
 
-        assert_eq!(mismatches, 0, "verification should pass with identical data");
-        println!("  Verification simulation passed ({} chunks)", (expected.len() + 255) / 256);
+        assert_eq!(
+            mismatches, 0,
+            "verification should pass with identical data"
+        );
+        println!(
+            "  Verification simulation passed ({} chunks)",
+            (expected.len() + 255) / 256
+        );
 
         // Simulate a single-byte corruption
         let mut corrupted = expected.clone();
@@ -133,7 +154,10 @@ fn test_firmware_verification_simulation() {
             corrupted[mid] ^= 0xFF; // Flip bits in middle
 
             let mut found_mismatch = false;
-            for (exp_chunk, cor_chunk) in expected.chunks(chunk_size).zip(corrupted.chunks(chunk_size)) {
+            for (exp_chunk, cor_chunk) in expected
+                .chunks(chunk_size)
+                .zip(corrupted.chunks(chunk_size))
+            {
                 if exp_chunk != cor_chunk {
                     found_mismatch = true;
                     break;

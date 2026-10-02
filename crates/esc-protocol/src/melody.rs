@@ -214,9 +214,7 @@ impl Melody {
         for i in 1..entries.len() {
             // A continuation of the same note has the same freq_index
             // and the previous entry had count == 255
-            if entries[i].freq_index != entries[i - 1].freq_index
-                || entries[i - 1].count != 255
-            {
+            if entries[i].freq_index != entries[i - 1].freq_index || entries[i - 1].count != 255 {
                 count += 1;
             }
         }
@@ -330,9 +328,7 @@ impl fmt::Display for Melody {
             if entries[i].is_pause() {
                 // Sum consecutive pause entries
                 let mut total_ms: u32 = 0;
-                while i < entries.len()
-                    && entries[i].is_pause()
-                {
+                while i < entries.len() && entries[i].is_pause() {
                     total_ms += entries[i].count as u32;
                     i += 1;
                 }
@@ -408,11 +404,7 @@ fn pow2_twelfths(n: i32) -> f32 {
         result *= base;
     }
 
-    if n < 0 {
-        1.0 / result
-    } else {
-        result
-    }
+    if n < 0 { 1.0 / result } else { result }
 }
 
 /// Convert a frequency (Hz) to Bluejay freq_index.
@@ -424,11 +416,7 @@ fn freq_to_bluejay_index(freq: f32) -> u32 {
         return 0;
     }
     let index = (1_000_000.0 / (freq * 24.72) - 399.3 / 24.72 + 0.5) as i32;
-    if index < 1 {
-        1
-    } else {
-        index as u32
-    }
+    if index < 1 { 1 } else { index as u32 }
 }
 
 /// Approximate a frequency to a note name and octave (for display only).

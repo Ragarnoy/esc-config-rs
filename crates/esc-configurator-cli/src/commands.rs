@@ -14,7 +14,7 @@ use anyhow::{Context, Result, bail};
 use esc_protocol::am32_config::{Am32Config, Am32ConfigData, Setting, apply_setting};
 use esc_protocol::config::ConfigBlock;
 use esc_protocol::device::{DeviceInfo, FirmwareType};
-use esc_protocol::ihex::{load_firmware, Firmware};
+use esc_protocol::ihex::{Firmware, load_firmware};
 
 use crate::relay::Relay;
 use crate::ui::{
@@ -323,56 +323,88 @@ fn edit_single_setting(config: &mut Am32Config, setting: Setting, name: &str) ->
         Setting::MaxRateOfChange => {
             if let Some(value) = edit_u8_setting(name, config.max_rate_of_change(), 1, 200)? {
                 config.set_max_rate_of_change(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::MinDuty => {
             if let Some(value) = edit_u8_setting(name, config.min_duty(), 0, 50)? {
                 config.set_min_duty(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::DisableStickCalibration => {
             if let Some(value) = edit_bool_setting(name, config.disable_stick_calibration())? {
                 config.set_disable_stick_calibration(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::AbsoluteVoltage => {
             if let Some(value) = edit_u8_setting(name, config.absolute_voltage(), 0, 255)? {
                 config.set_absolute_voltage(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::CurrentLimitP => {
             if let Some(value) = edit_u8_setting(name, config.current_limit_p(), 0, 255)? {
                 config.set_current_limit_p(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::CurrentLimitI => {
             if let Some(value) = edit_u8_setting(name, config.current_limit_i(), 0, 255)? {
                 config.set_current_limit_i(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::CurrentLimitD => {
             if let Some(value) = edit_u8_setting(name, config.current_limit_d(), 0, 255)? {
                 config.set_current_limit_d(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::ActiveBrakeStrength => {
             if let Some(value) = edit_u8_setting(name, config.active_brake_strength(), 1, 10)? {
                 config.set_active_brake_strength(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
@@ -380,217 +412,341 @@ fn edit_single_setting(config: &mut Am32Config, setting: Setting, name: &str) ->
         Setting::DirectionReversed => {
             if let Some(value) = edit_direction_setting(config.direction_reversed())? {
                 config.set_direction_reversed(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::Bidirectional => {
             if let Some(value) = edit_bool_setting(name, config.bidirectional())? {
                 config.set_bidirectional(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::SinusoidalStartup => {
             if let Some(value) = edit_bool_setting(name, config.sinusoidal_startup())? {
                 config.set_sinusoidal_startup(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::ComplementaryPwm => {
             if let Some(value) = edit_bool_setting(name, config.complementary_pwm())? {
                 config.set_complementary_pwm(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::VariablePwm => {
             if let Some(value) = edit_bool_setting(name, config.variable_pwm())? {
                 config.set_variable_pwm(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::StuckRotorProtection => {
             if let Some(value) = edit_bool_setting(name, config.stuck_rotor_protection())? {
                 config.set_stuck_rotor_protection(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::TimingAdvance => {
             if let Some(value) = edit_timing_setting(config.timing_advance())? {
                 config.set_timing_advance(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::PwmFrequency => {
             if let Some(value) = edit_u8_setting(name, config.pwm_frequency_khz(), 16, 96)? {
                 config.set_pwm_frequency_khz(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::StartupPower => {
             if let Some(value) = edit_u8_setting(name, config.startup_power(), 50, 150)? {
                 config.set_startup_power(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::MotorKv => {
             if let Some(value) = edit_motor_kv_setting(config.motor_kv())? {
                 config.set_motor_kv(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::MotorPoles => {
             if let Some(value) = edit_u8_setting(name, config.motor_poles(), 2, 36)? {
                 config.set_motor_poles(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::BrakeOnStop => {
             if let Some(value) = edit_bool_setting(name, config.brake_on_stop())? {
                 config.set_brake_on_stop(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::StallProtection => {
             if let Some(value) = edit_bool_setting(name, config.stall_protection())? {
                 config.set_stall_protection(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::BeepVolume => {
             if let Some(value) = edit_u8_setting(name, config.beep_volume(), 0, 11)? {
                 config.set_beep_volume(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::Telemetry30ms => {
             if let Some(value) = edit_bool_setting(name, config.telemetry_30ms())? {
                 config.set_telemetry_30ms(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::ServoLow => {
             if let Some(value) = edit_u8_setting(name, config.servo_low(), 0, 255)? {
                 config.set_servo_low(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::ServoHigh => {
             if let Some(value) = edit_u8_setting(name, config.servo_high(), 0, 255)? {
                 config.set_servo_high(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::ServoNeutral => {
             if let Some(value) = edit_u8_setting(name, config.servo_neutral(), 0, 255)? {
                 config.set_servo_neutral(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::LowVoltageCutoff => {
             if let Some(value) = edit_bool_setting(name, config.low_voltage_cutoff())? {
                 config.set_low_voltage_cutoff(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::LvcThreshold => {
             if let Some(value) = edit_u8_setting(name, config.lvc_threshold(), 0, 255)? {
                 config.set_lvc_threshold(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::RcCarReversing => {
             if let Some(value) = edit_bool_setting(name, config.rc_car_reversing())? {
                 config.set_rc_car_reversing(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::UseHallSensors => {
             if let Some(value) = edit_bool_setting(name, config.use_hall_sensors())? {
                 config.set_use_hall_sensors(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::SineModeRange => {
             if let Some(value) = edit_u8_setting(name, config.sine_mode_range(), 5, 25)? {
                 config.set_sine_mode_range(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::DragBrakeStrength => {
             if let Some(value) = edit_u8_setting(name, config.drag_brake_strength(), 1, 10)? {
                 config.set_drag_brake_strength(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::RunningBrakeStrength => {
             if let Some(value) = edit_u8_setting(name, config.running_brake_strength(), 1, 10)? {
                 config.set_running_brake_strength(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::AutoTiming => {
             if let Some(value) = edit_bool_setting(name, config.auto_timing())? {
                 config.set_auto_timing(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::TemperatureLimit => {
             if let Some(value) = edit_u8_setting(name, config.temperature_limit(), 70, 142)? {
                 config.set_temperature_limit(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::CurrentLimit => {
             if let Some(value) = edit_u8_setting(name, config.current_limit(), 0, 255)? {
                 config.set_current_limit(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::SineModePower => {
             if let Some(value) = edit_u8_setting(name, config.sine_mode_power(), 1, 10)? {
                 config.set_sine_mode_power(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::SignalType => {
             if let Some(value) = edit_u8_setting(name, config.signal_type() as u8, 0, 2)? {
                 config.set_signal_type(esc_protocol::SignalType::from_byte(value));
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::ServoDeadband => {
             if let Some(value) = edit_u8_setting(name, config.servo_deadband(), 0, 255)? {
                 config.set_servo_deadband(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
@@ -656,15 +812,23 @@ pub fn flash_firmware(device: &str, hex_file: &str) -> Result<()> {
 
     // Load and parse firmware
     println!("Loading firmware from {hex_file}...");
-    let content = fs::read_to_string(hex_file)
-        .with_context(|| format!("failed to read {hex_file}"))?;
-    let firmware = load_firmware(&content)
-        .with_context(|| format!("failed to parse {hex_file}"))?;
+    let content =
+        fs::read_to_string(hex_file).with_context(|| format!("failed to read {hex_file}"))?;
+    let firmware =
+        load_firmware(&content).with_context(|| format!("failed to parse {hex_file}"))?;
     let binary = firmware.to_binary();
 
-    println!("Firmware size: {} bytes ({:.1} KB)", binary.len(), binary.len() as f64 / 1024.0);
+    println!(
+        "Firmware size: {} bytes ({:.1} KB)",
+        binary.len(),
+        binary.len() as f64 / 1024.0
+    );
     if let Some(min) = firmware.min_address() {
-        println!("Address range: 0x{:08X} - 0x{:08X}", min, firmware.max_address().unwrap_or(min));
+        println!(
+            "Address range: 0x{:08X} - 0x{:08X}",
+            min,
+            firmware.max_address().unwrap_or(min)
+        );
     }
 
     // Connect to ESC
@@ -695,7 +859,9 @@ pub fn flash_firmware(device: &str, hex_file: &str) -> Result<()> {
                 // HEX filenames look like "AM32_F4A_4IN1_F421_2.20"
                 // Strip version suffix (last segment with a dot) then take MCU type
                 let hex_parts: Vec<&str> = hex_basename.split('_').collect();
-                let hex_mcu = hex_parts.iter().rev()
+                let hex_mcu = hex_parts
+                    .iter()
+                    .rev()
                     .find(|part| !part.contains('.'))
                     .copied()
                     .unwrap_or("");
@@ -705,7 +871,8 @@ pub fn flash_firmware(device: &str, hex_file: &str) -> Result<()> {
                     bail!(
                         "MCU type mismatch: ESC has '{}' but firmware is for '{}'. \
                          Flashing wrong firmware can brick the ESC!",
-                        esc_mcu, hex_mcu
+                        esc_mcu,
+                        hex_mcu
                     );
                 }
             }
@@ -743,7 +910,12 @@ pub fn flash_firmware(device: &str, hex_file: &str) -> Result<()> {
     let first_page = firmware_start / page_size;
     let last_page = (firmware_start + binary.len() as u16 - 1) / page_size;
     let num_pages = last_page - first_page + 1;
-    println!("\nErasing {} pages (0x{:04X}-0x{:04X})...", num_pages, first_page * page_size, (last_page + 1) * page_size - 1);
+    println!(
+        "\nErasing {} pages (0x{:04X}-0x{:04X})...",
+        num_pages,
+        first_page * page_size,
+        (last_page + 1) * page_size - 1
+    );
     for page in first_page..=last_page {
         let page_addr = page * page_size;
         relay.set_address(page_addr)?;
@@ -751,7 +923,10 @@ pub fn flash_firmware(device: &str, hex_file: &str) -> Result<()> {
     }
     println!("  Pages erased");
 
-    println!("\nFlashing {} chunks to 0x{:04X}...", total_chunks, firmware_start);
+    println!(
+        "\nFlashing {} chunks to 0x{:04X}...",
+        total_chunks, firmware_start
+    );
 
     for chunk_idx in 0..total_chunks {
         let start = chunk_idx * chunk_size;
@@ -782,7 +957,12 @@ pub fn flash_firmware(device: &str, hex_file: &str) -> Result<()> {
                         println!("  WARNING: Could not restore boot byte!");
                     }
                     relay.disconnect().ok();
-                    bail!("Flash failed at 0x{:04X} after {} retries: {}", address, retries, e);
+                    bail!(
+                        "Flash failed at 0x{:04X} after {} retries: {}",
+                        address,
+                        retries,
+                        e
+                    );
                 }
             }
         }
@@ -818,13 +998,17 @@ pub fn verify_firmware(device: &str, hex_file: &str) -> Result<()> {
 
     // Load firmware from hex file
     println!("Loading firmware from {hex_file}...");
-    let content = fs::read_to_string(hex_file)
-        .with_context(|| format!("failed to read {hex_file}"))?;
-    let firmware = load_firmware(&content)
-        .with_context(|| format!("failed to parse {hex_file}"))?;
+    let content =
+        fs::read_to_string(hex_file).with_context(|| format!("failed to read {hex_file}"))?;
+    let firmware =
+        load_firmware(&content).with_context(|| format!("failed to parse {hex_file}"))?;
     let binary = firmware.to_binary();
 
-    println!("Firmware size: {} bytes ({:.1} KB)", binary.len(), binary.len() as f64 / 1024.0);
+    println!(
+        "Firmware size: {} bytes ({:.1} KB)",
+        binary.len(),
+        binary.len() as f64 / 1024.0
+    );
 
     // Connect to ESC
     println!("\nConnecting to ESC via {device}...");
@@ -918,7 +1102,10 @@ pub fn restore_config(device: &str, input: &str) -> Result<()> {
     let data = fs::read(input).with_context(|| format!("failed to read {input}"))?;
 
     if data.len() != 256 {
-        bail!("invalid backup file: expected 256 bytes, got {}", data.len());
+        bail!(
+            "invalid backup file: expected 256 bytes, got {}",
+            data.len()
+        );
     }
 
     let config = ConfigBlock::from_bytes(&data);
@@ -963,11 +1150,10 @@ pub fn export_config(device: &str, output: &str) -> Result<()> {
     let config = Am32Config::from_bytes(raw);
     let data = Am32ConfigData::from(&config);
 
-    let toml_string = toml::to_string_pretty(&data)
-        .context("failed to serialize config to TOML")?;
+    let toml_string =
+        toml::to_string_pretty(&data).context("failed to serialize config to TOML")?;
 
-    fs::write(output, &toml_string)
-        .with_context(|| format!("failed to write TOML to {output}"))?;
+    fs::write(output, &toml_string).with_context(|| format!("failed to write TOML to {output}"))?;
 
     println!("Configuration exported to: {output}");
 
@@ -983,8 +1169,8 @@ pub fn import_config(device: &str, input: &str) -> Result<()> {
         bail!("TOML file not found: {input}");
     }
 
-    let toml_string = fs::read_to_string(input)
-        .with_context(|| format!("failed to read {input}"))?;
+    let toml_string =
+        fs::read_to_string(input).with_context(|| format!("failed to read {input}"))?;
 
     let data: Am32ConfigData = toml::from_str(&toml_string)
         .with_context(|| format!("failed to parse TOML from {input}"))?;
@@ -1037,11 +1223,11 @@ pub fn hex_info(hex_file: &str) -> Result<()> {
         bail!("hex file not found: {hex_file}");
     }
 
-    let content = fs::read_to_string(hex_file)
-        .with_context(|| format!("failed to read {hex_file}"))?;
+    let content =
+        fs::read_to_string(hex_file).with_context(|| format!("failed to read {hex_file}"))?;
 
-    let firmware = load_firmware(&content)
-        .with_context(|| format!("failed to parse {hex_file}"))?;
+    let firmware =
+        load_firmware(&content).with_context(|| format!("failed to parse {hex_file}"))?;
 
     println!("Intel HEX file: {hex_file}");
     println!();
@@ -1053,13 +1239,15 @@ pub fn hex_info(hex_file: &str) -> Result<()> {
 /// Print detailed firmware information.
 fn print_firmware_info(firmware: &Firmware) {
     println!("Segments: {}", firmware.segments.len());
-    println!("Total size: {} bytes ({:.1} KB)",
+    println!(
+        "Total size: {} bytes ({:.1} KB)",
         firmware.total_size(),
         firmware.total_size() as f64 / 1024.0
     );
 
     if let Some(min) = firmware.min_address() {
-        println!("Address range: 0x{:08X} - 0x{:08X}",
+        println!(
+            "Address range: 0x{:08X} - 0x{:08X}",
             min,
             firmware.max_address().unwrap_or(min)
         );
@@ -1072,7 +1260,8 @@ fn print_firmware_info(firmware: &Firmware) {
     println!();
     println!("Segment details:");
     for (i, segment) in firmware.segments.iter().enumerate() {
-        println!("  [{i}] 0x{:08X} - 0x{:08X} ({} bytes)",
+        println!(
+            "  [{i}] 0x{:08X} - 0x{:08X} ({} bytes)",
             segment.start_address,
             segment.end_address(),
             segment.data.len()
@@ -1453,7 +1642,9 @@ fn is_rtttl_format(data: &[u8]) -> bool {
         let text = text.trim();
         // Must have at least 2 colons and be mostly printable ASCII
         let colon_count = text.chars().filter(|&c| c == ':').count();
-        let is_printable = text.chars().all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace());
+        let is_printable = text
+            .chars()
+            .all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace());
         colon_count >= 2 && is_printable && text.len() > 5
     } else {
         false

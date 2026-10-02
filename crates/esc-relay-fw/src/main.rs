@@ -234,13 +234,22 @@ async fn esc_task(mut uart: onewire_uart::OneWireUart<'static, PIO0, 0, 1>) {
 
             // Parse size from set_buffer command (tx_buf[9])
             // SIZE=0 means 256 bytes in AM32 protocol
-            let size = if tx_buf[9] == 0 { 256usize } else { tx_buf[9] as usize };
+            let size = if tx_buf[9] == 0 {
+                256usize
+            } else {
+                tx_buf[9] as usize
+            };
             let data_start = 12usize; // After set_addr (6) + set_buffer (6)
             let data_available = tx_len.saturating_sub(data_start + 2); // -2 for CLI's CRC
 
             if data_available < size {
-                warn!("Incomplete write data: have {}, need {}", data_available, size);
-                ESC_TO_USB.send(DataPacket::new(&resp_buf[..resp_len])).await;
+                warn!(
+                    "Incomplete write data: have {}, need {}",
+                    data_available, size
+                );
+                ESC_TO_USB
+                    .send(DataPacket::new(&resp_buf[..resp_len]))
+                    .await;
                 uart.switch_to_tx_idle();
                 continue;
             }
@@ -275,13 +284,17 @@ async fn esc_task(mut uart: onewire_uart::OneWireUart<'static, PIO0, 0, 1>) {
 
             // Longer timeout for larger writes (flash operations take time)
             let timeout_ms = if size > 64 { 200 } else { 100 };
-            let n2 = uart.read_exact_with_timeout(&mut rx_buf, 1, timeout_ms).await;
+            let n2 = uart
+                .read_exact_with_timeout(&mut rx_buf, 1, timeout_ms)
+                .await;
             if n2 > 0 {
                 resp_buf[resp_len] = rx_buf[0];
                 resp_len += 1;
             }
 
-            ESC_TO_USB.send(DataPacket::new(&resp_buf[..resp_len])).await;
+            ESC_TO_USB
+                .send(DataPacket::new(&resp_buf[..resp_len]))
+                .await;
             uart.switch_to_tx_idle();
             continue;
         }
@@ -293,13 +306,15 @@ async fn esc_task(mut uart: onewire_uart::OneWireUart<'static, PIO0, 0, 1>) {
         // After SetBuffer, the ESC expects the data payload immediately.
         // We must handle SetBuffer → Data atomically to avoid USB latency
         // causing the ESC to timeout between the two commands.
-        let is_set_buffer = tx_len == 6
-            && tx_buf[0] == 0xFE
-            && tx_buf[1] == 0x00
-            && tx_buf[2] == 0x00;
+        let is_set_buffer =
+            tx_len == 6 && tx_buf[0] == 0xFE && tx_buf[1] == 0x00 && tx_buf[2] == 0x00;
         if is_set_buffer {
             // Parse expected data size from SetBuffer command
-            let data_size = if tx_buf[3] == 0 { 256usize } else { tx_buf[3] as usize };
+            let data_size = if tx_buf[3] == 0 {
+                256usize
+            } else {
+                tx_buf[3] as usize
+            };
 
             // Echo the SetBuffer command
             ESC_TO_USB.send(DataPacket::new(&tx_buf[..tx_len])).await;
@@ -351,7 +366,9 @@ async fn esc_task(mut uart: onewire_uart::OneWireUart<'static, PIO0, 0, 1>) {
 
             // Wait for ESC ACK
             let timeout_ms = if data_size > 64 { 200 } else { 100 };
-            let n = uart.read_exact_with_timeout(&mut rx_buf, 1, timeout_ms).await;
+            let n = uart
+                .read_exact_with_timeout(&mut rx_buf, 1, timeout_ms)
+                .await;
 
             // Echo the data payload + ESC response
             let mut resp = [0u8; MAX_RESPONSE_SIZE];
@@ -383,7 +400,9 @@ async fn esc_task(mut uart: onewire_uart::OneWireUart<'static, PIO0, 0, 1>) {
         combined[..echo_len].copy_from_slice(&tx_buf[..echo_len]);
         let resp_len = n.min(MAX_RESPONSE_SIZE - echo_len);
         combined[echo_len..echo_len + resp_len].copy_from_slice(&rx_buf[..resp_len]);
-        ESC_TO_USB.send(DataPacket::new(&combined[..echo_len + resp_len])).await;
+        ESC_TO_USB
+            .send(DataPacket::new(&combined[..echo_len + resp_len]))
+            .await;
         uart.switch_to_tx_idle();
     }
 }

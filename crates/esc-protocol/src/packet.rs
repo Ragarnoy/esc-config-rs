@@ -131,7 +131,6 @@ pub const ADDR_TIMESTAMP: u16 = 0xEB00;
 /// Device ID / signature address.
 pub const ADDR_DEVICE_ID: u16 = 0xF7AC;
 
-
 // ============================================================================
 // Packet Builders
 // ============================================================================
@@ -185,10 +184,10 @@ pub const fn build_disconnect_packet() -> [u8; 4] {
 #[inline]
 pub fn build_set_address_packet(address: u16) -> [u8; 6] {
     let mut packet = [0u8; 6];
-    packet[0] = OP_SET_ADDRESS[0];    // 0xFF
-    packet[1] = OP_SET_ADDRESS[1];    // 0x00
+    packet[0] = OP_SET_ADDRESS[0]; // 0xFF
+    packet[1] = OP_SET_ADDRESS[1]; // 0x00
     packet[2] = (address >> 8) as u8; // addr MSB (high byte first)
-    packet[3] = address as u8;        // addr LSB
+    packet[3] = address as u8; // addr LSB
     let crc = crc16_ibm_bytes(&packet[0..4]);
     packet[4] = crc[0];
     packet[5] = crc[1];
@@ -455,10 +454,7 @@ mod tests {
     #[test]
     fn write_page_packet_exact() {
         // Short format for AM32
-        assert_eq!(
-            build_write_page_packet(),
-            [0xFE, 0x00, 0x40, 0x60]
-        );
+        assert_eq!(build_write_page_packet(), [0xFE, 0x00, 0x40, 0x60]);
     }
 
     #[test]
@@ -506,5 +502,4 @@ mod tests {
         assert!(is_keepalive_ack(0xC1));
         assert!(!is_keepalive_ack(0x30));
     }
-
 }
