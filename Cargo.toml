@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/esc-protocol",
     "crates/esc-session",
+    "crates/esc-config-icd",
     "crates/esc-configurator-cli",
     "crates/esc-relay-fw",
     "crates/rtttl-rs",
@@ -13,6 +14,7 @@ members = [
 default-members = [
     "crates/esc-protocol",
     "crates/esc-session",
+    "crates/esc-config-icd",
     "crates/esc-configurator-cli",
     "crates/rtttl-rs",
 ]
@@ -29,6 +31,13 @@ anyhow = "1.0.104"
 serialport = "4.10.1"
 dialoguer = "0.12.0"
 toml = "1.0"
+# postcard-rpc stack, same versions as Elle
+postcard = { version = "1.1", default-features = false }
+postcard-rpc = { version = "0.12", default-features = false }
+postcard-schema = { version = "0.2", default-features = false, features = ["derive", "heapless-v0_9"] }
+heapless = { version = "0.9", features = ["serde"] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+cobs = { version = "0.5", default-features = false }
 embassy-rp = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
 embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
 embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }

@@ -150,6 +150,22 @@ impl<L: Link> Esc<L> {
         Ok(esc)
     }
 
+    /// Rebuild a session from an earlier connect, without a new handshake.
+    ///
+    /// For a server that keeps its link between requests: it stores the connect
+    /// reply and layout and resumes over `&mut link` for each request. The
+    /// bootloader keeps no session state, so this is safe as long as the ESC has not
+    /// been reset in between (a reset makes the next command fail, not misbehave).
+    pub fn resume(link: L, timing: Timing, reply: ConnectResponse, layout: Layout) -> Self {
+        Self {
+            link,
+            timing,
+            reply,
+            device: classify_device(reply.device_id),
+            layout,
+        }
+    }
+
     /// The connect reply.
     pub const fn connect_reply(&self) -> &ConnectResponse {
         &self.reply

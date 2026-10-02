@@ -1,0 +1,25 @@
+[package]
+name = "esc-config-icd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Typed operations for configuring AM32 ESCs over postcard-rpc (relay USB, Elle RPC)"
+
+[features]
+default = []
+# Conversions from esc-session types (for servers that run the session).
+session = ["dep:esc-session", "dep:esc-protocol"]
+use-std = ["postcard/use-std", "postcard-rpc/use-std", "postcard-schema/use-std", "serde/std"]
+
+[dependencies]
+postcard.workspace = true
+postcard-rpc.workspace = true
+postcard-schema.workspace = true
+heapless.workspace = true
+serde.workspace = true
+esc-session = { path = "../esc-session", optional = true }
+esc-protocol = { path = "../esc-protocol", optional = true }
+
+[dev-dependencies]
+esc-session = { path = "../esc-session" }
+esc-protocol = { path = "../esc-protocol" }
