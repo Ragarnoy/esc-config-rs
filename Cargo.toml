@@ -5,6 +5,7 @@ members = [
     "crates/esc-session",
     "crates/esc-config-icd",
     "crates/esc-configurator-cli",
+    "crates/esc-onewire-rp",
     "crates/esc-relay-fw",
     "crates/rtttl-rs",
 ]
