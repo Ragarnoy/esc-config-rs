@@ -1,19 +1,22 @@
 # Revamp and audit
 
 Goal: turn esc-config-rs into a set of crates that a flight controller can embed,
-starting with Elle (proposal `elle/docs/changes/0002-esc-config-over-rpc.md`), while the
-CLI + relay keep working. This file is the plan; tick items off as they land. The
+starting with Elle (proposal `elle/docs/changes/0002-esc-config-over-rpc.md`). The CLI
+and relay may be broken during Phase 2 and must work again at the end of Phase 3.
+This file is the plan; tick items off as they land. The
 target layout is a proposal, not a decision: the audit (Phase 1) may change it.
 
-## Where things stand (2026-10-02)
+## Where things stand (2026-10-02, Phase 2)
 
-- `cargo test` passes: 150 unit + 2 integration tests in `esc-protocol`, 28 in
-  `rtttl-rs`, 5 in `esc-relay-core`, plus doc tests. The CLI has none.
-- `esc-protocol` and `esc-relay-core` build for `thumbv8m.main-none-eabihf`.
-- A large uncommitted change set sits in the working tree (37 files; `esc-dshot`,
-  `beep_test`, `motor_test`, `dshot_pio.rs` deleted). **Phase 0 commits it.**
+- `esc-session` holds the bootloader driver; 23 tests run it against a simulated AM32
+  bootloader. `esc-protocol` is reduced to AM32 frames, classification, layout,
+  settings layout, melody and Intel HEX, all `no_std`. `esc-relay-core`, MSP and
+  four-way are gone.
+- The CLI runs on `esc-session` through a `Link` over the relay's USB passthrough. It
+  builds and its logic follows the findings, but it has not been run on hardware.
+- Below, "Structural problems" is the pre-revamp state (Phase 0 baseline).
 
-### Structural problems
+### Structural problems (baseline)
 
 1. **The logic that talks to an ESC lives in the CLI.** `esc-configurator-cli/src/relay.rs`
    holds connect, read, write, commit, keepalive, read-modify-write of the EEPROM block,
@@ -279,10 +282,49 @@ Noticed during Phase 0, for the audit:
       (Phase 1 findings; scope answers need a decision)
 
 ### Phase 2: core extraction
-- [ ] `Link` trait + `esc-session` + fake ESC tests.
-- [ ] Move the sequencing out of `cli/src/relay.rs` into `esc-session`.
-- [ ] `am32_config` no_std.
-- [ ] Delete `esc-relay-core` (or rename it to `esc-session` if that is cleaner).
+- [x] `Link` trait + `esc-session` + fake ESC tests.
+- [x] Move the sequencing out of `cli/src/relay.rs` into `esc-session`.
+- [x] `am32_config` no_std.
+- [x] Delete `esc-relay-core` (or rename it to `esc-session` if that is cleaner).
+- [x] Fix the findings in the new core (status below).
+
+`Link` as landed: `send(frame)` (one frame, back to back, line released after),
+`recv(buf, timeout) -> usize` (bytes received before the timeout; a timeout is not an
+error), `delay(d)`. `Duration` is a local µs type. Retries and timeouts are in a
+`Timing` struct with direct-wire defaults; a link with its own latency adds to them
+(the CLI's relay link adds 100 ms per reply).
+
+Findings status after Phase 2:
+
+| # | Status |
+|---|---|
+| F1 | Fixed: `Am32Config::apply_defaults` (byte 0 = 1, version ≥ 4, keeps melody/CAN/versions); `reset-defaults` is read-modify-write. |
+| F2 | Fixed: `Esc::write_eeprom` writes the 192-byte struct. |
+| F3 | Fixed: every read is CRC-checked and retried (`parse_read_reply`). |
+| F4 | Fixed: `restore` writes bytes 5..192, keeps boot/version bytes, refuses another EEPROM layout version. Settings edits (`set`, `import`, interactive save) only touch bytes 5..48. |
+| F5 | Fixed: `Layout` from devinfo or flash code; flash addresses shifted; image start checked against the hex. |
+| F6 | Fixed: file name from the layout; melody from the settings block. |
+| F7 | Fixed: classify by flash code; no panics. |
+| F8 | Fixed: a payload answered `C2` or not at all is resent. |
+| F9 | Fixed: last chunk padded to 8 bytes. |
+| F10 | Session side: one `send` per frame. Relay: payload + CRC now one `write()`. |
+| F11 | Open until Phase 3 (relay byte sniffing). |
+| F12 | Fixed: `read` shows connect info and layout instead of reading `0xF7AC`. |
+| F13 | Fixed: `Esc::run` sends `00 00 00 00`; CLI `run` command. Other commands leave the ESC in the bootloader. |
+| F14 | Fixed (Phase 1). |
+| F15 | Open until Phase 3. |
+| F16 | Fixed in the session (typed lengths, `InvalidLength`). |
+| F17 | Fixed: no erase commands. |
+| F18 | Fixed: old `Session`, `config.rs`, unused frames and `esc-relay-core` deleted. |
+| F19 | Partly: offset 13 named; not exposed as a setting yet. "Encrypted" wording gone. |
+| F20 | `expect`s gone with the old CLI flow. |
+| F21 | Fixed: `required-features = ["std"]`. |
+
+Also changed: a failed flash now leaves the boot byte cleared (the old CLI restored
+the previous value, which could boot half an image); the CLI no longer needs tokio.
+Not handled: if a payload is lost for good, the bootloader stays in payload mode and
+takes the next frame (even a connect) as payload until it gets a well-formed payload
+of the announced size or is power-cycled.
 
 ### Phase 3: firmware and CLI on the new core
 - [ ] `esc-onewire-rp` crate, clock-derived divider.

@@ -13,18 +13,19 @@ ESC configurator toolchain for AM32 electronic speed controllers. Does NOT suppo
 being reshaped so a flight controller (Elle, `../elle`, proposal
 `docs/changes/0002-esc-config-over-rpc.md`) can embed the ESC session logic:
 
-- The bootloader sequencing moves out of `esc-configurator-cli/src/relay.rs` into a
-  `no_std`, async, hardware-free `esc-session` crate, generic over a small `Link` trait
-  and tested against a simulated AM32 bootloader.
+- The bootloader sequencing lives in `esc-session`: `no_std`, async, hardware-free,
+  generic over a small `Link` trait, tested against a simulated AM32 bootloader
+  (`crates/esc-session/tests/fake_esc`). Protocol rules belong there, not in callers.
 - The relay firmware stops pattern-matching the USB byte stream; it runs the session
   itself and speaks typed operations (shared ICD with Elle).
 - Work goes phase by phase (baseline → audit → core extraction → firmware/CLI → hand-off).
-  Phase 1 is read-only: findings go in `docs/REVAMP.md`, not straight into code.
-- Several protocol statements in this file and in `docs/` contradict each other or the
-  code (bootloader entry high vs low, Set Buffer ACK, timeouts, ESC pin). They are
-  listed in `docs/REVAMP.md`; treat them as unverified until the audit settles them.
-- Keep the CLI + relay working at the end of every phase; bench regression is
-  backup / set / restore / flash on a real ESC, compared with pre-revamp backups.
+- Protocol facts come from the AM32 bootloader source and are written down in
+  `docs/REVAMP.md` ("How the bootloader actually behaves"). Older docs in `docs/`
+  (`protocol-direct.md`, `flash-implementation.md`, `memory-layout.md`) predate the
+  audit and contain errors listed there; trust REVAMP.md over them.
+- The CLI and relay need not work during Phase 2; they must work again at the end of
+  Phase 3. Bench regression then: backup / set / restore / flash on a real ESC,
+  compared with pre-revamp backups.
 
 ## Build Commands
 
@@ -46,19 +47,18 @@ cargo build -p esc-relay-fw --target thumbv8m.main-none-eabihf
 
 ```
 crates/
-├── esc-protocol/      # Core BLHeli protocol (no_std)
+├── esc-protocol/      # AM32 bootloader protocol, pure logic (no_std)
 │   ├── crc.rs         # CRC-16/IBM implementation
-│   ├── packet.rs      # Protocol packet builders
-│   ├── bootloader.rs  # Bootloader state machine
-│   ├── device.rs      # Device classification (AM32; SiLabs recognised, refused)
-│   ├── config.rs      # Config block parsing
-│   ├── am32_config.rs # AM32 configuration settings
+│   ├── packet.rs      # Frame builders and reply parsers
+│   ├── device.rs      # Classification from the connect reply (AM32; SiLabs refused)
+│   ├── layout.rs      # Flash layout in Set Address units (devinfo / flash code)
+│   ├── am32_config.rs # AM32 EEPROM settings layout
 │   ├── ihex.rs        # Intel HEX file parser
 │   └── melody.rs      # Bluejay melody format + RTTTL conversion
-├── esc-relay-core/    # Generic relay MCU logic (no_std)
-│   ├── protocol.rs    # USB<->relay command protocol
-│   ├── state.rs       # Relay state machine
-│   └── traits.rs      # HAL trait re-exports
+├── esc-session/       # Bootloader session over a `Link` (no_std, async)
+│   ├── link.rs        # `Link` trait, `Duration`
+│   ├── session.rs     # `Esc`: connect, read, write, settings, flash, run
+│   └── tests/         # Simulated AM32 bootloader + session tests
 ├── esc-relay-fw/      # Embassy firmware for RP2350
 │   ├── main.rs        # Entry point, USB CDC-ACM, write handler
 │   └── onewire_uart.rs # PIO-based half-duplex UART
@@ -67,14 +67,14 @@ crates/
 └── esc-configurator-cli/  # CLI tool (std)
     ├── main.rs        # Clap CLI definition
     ├── commands.rs    # Command implementations
-    ├── relay.rs       # Relay communication
+    ├── relay.rs       # `Link` over the relay's USB passthrough + blocking facade
     └── ui.rs          # Terminal UI (dialoguer)
 ```
 
 ## Key Constraints
 
-- `esc-protocol`, `esc-relay-core`, `rtttl-rs` (and the future `esc-session`,
-  `esc-config-icd`) must remain `#![no_std]`; check with
+- `esc-protocol`, `esc-session`, `rtttl-rs` (and the future `esc-config-icd`) must
+  remain `#![no_std]`, no alloc; check with
   `cargo build -p <crate> --target thumbv8m.main-none-eabihf`
 - No hardcoded clock rates in firmware code: derive PIO dividers from `clk_sys_freq()`
   (Elle runs at 200 MHz, the relay at 150 MHz)
@@ -90,64 +90,41 @@ PC (USB Serial) <-> Relay MCU (RP2350) <-> ESC
                          +-- UART 19200 (BLHeli/AM32 bootloader protocol)
 ```
 
-The relay MCU acts as a USB-to-UART bridge for ESC bootloader communication. It handles write operations atomically to avoid USB latency causing CRC errors. The ESC signal pin is configurable (currently GPIO15, any GPIO works). The ESC must already be in bootloader mode (e.g. via DShot command from a flight controller, or power-on with signal held low).
+The relay MCU bridges USB to the ESC's one-wire UART (Phase 3 replaces this with
+typed operations running `esc-session` on the relay). The ESC signal pin is GPIO15.
+The ESC enters its bootloader when the signal line is **driven high** at power-on
+(and leaves it if the line is held low for 20 ms).
 
 ## Protocol Details
 
-### AM32 Bootloader Protocol
+The authoritative summary is `docs/REVAMP.md`, "How the bootloader actually behaves".
+The essentials:
 
-All commands use CRC-16/IBM (polynomial 0xA001, init 0x0000), sent LSB first.
-
-**Read sequence (handled by passthrough):**
-1. Set Address: `[FF 00 ADDR_H ADDR_L CRC_L CRC_H]` → ACK (0x30)
-2. Read: `[03 LEN CRC_L CRC_H]` → `[DATA...] [CRC_L CRC_H] [ACK]`
-
-**Write sequence (handled atomically by firmware):**
-1. Set Address: `[FF 00 ADDR_H ADDR_L CRC_L CRC_H]` → ACK (0x30)
-2. Set Buffer: `[FE 00 x256 LEN CRC_L CRC_H]` → **NO ACK**
-3. Payload: `[DATA...] [CRC_L CRC_H]` → ACK (0x30)
-4. Flash/Commit: `[01 01 CRC_L CRC_H]` → ACK (0x30)
-
-**Critical:** The Set Buffer command does NOT receive an ACK. The firmware detects write transactions by looking for the `[FF 00 ... FE 00 00 ...]` combined pattern and handles steps 1-3 atomically.
-
-### Relay Command Protocol
-- Frame format: `[CMD:1] [LEN:1] [DATA:LEN] [CRC:1]`
-- CRC is XOR of all preceding bytes
-- Commands: Ping, Info, EnterBootloader, SendDshot, EnterPassthrough, ExitPassthrough, Reset
+- CRC-16/IBM (poly 0xA001, init 0), LSB first, on every command frame.
+- Frames end on ~230 µs of idle line: bytes of a frame back to back, frames apart.
+- Write: Set Address → Set Buffer (`FE 00 00 N`, or `FE 00 01 00` for 256; **no
+  reply**) → ≥0.3 ms gap → payload + CRC (`30`, or `C2`: still waiting for a
+  payload) → Prog Flash `01 01` (`30`). Lengths are multiples of 8.
+- A write at a page-aligned address erases the page, so the 192-byte settings
+  structure (config 0–47, melody 48–175, CAN 176–183) is always written whole.
+- EEPROM byte 0 must be `0x01` or the bootloader never starts the app.
+- Addresses are shifted right by 2 on 128 KiB parts (G071); `esc_protocol::Layout`
+  handles it. Run (`00 00 00 00`) leaves the bootloader.
 
 ## Testing
 
-All protocol logic has unit tests. Run with `cargo test`. Key test vectors for CRC-16/IBM are in `esc-protocol/src/crc.rs`.
+`cargo test`. Session behaviour is tested against the simulated bootloader in
+`crates/esc-session/tests/fake_esc`; extend the fake when a new bootloader quirk is
+found, citing the AM32 source it models.
 
 ## Conventions
 
 - Keep clippy pedantic warnings minimal; fix relevant ones, ignore cosmetic ones
 - Use `#[allow(dead_code)]` for unused protocol methods that are part of the complete API
-- Use `async_fn_in_trait` (allowed in relay-core) for async HAL traits
+- `async fn` in traits (`#[allow(async_fn_in_trait)]`) for `Link`-style traits
 - Prefer embedded-hal traits over custom ones where possible
 
-## Key Implementation Notes
-
-- The AM32 write sequence discovery: Set Buffer gets **NO ACK** - this was a critical finding
-- The relay firmware handles writes atomically to avoid USB latency causing CRC errors
-- Config address: 0x7C00 (48 bytes used, padded to 256)
-- Arduino pattern for reads: 48 bytes at 0x7C00, then 128 bytes at 0x7C30
-- The ESC signal pin (one-wire UART) is configurable; currently set to GPIO15 in the firmware
-
-### EEPROM Write: Full-Block Read-Modify-Write
-
-AM32 flash writes erase the entire flash page. Writing only config (48 bytes) or
-only melody (128 bytes) at a sub-page offset destroys the rest of the page.
-
-**Both `write_config` and `write_melody` must use read-modify-write:**
-1. Read the full 256-byte config block from EEPROM
-2. Overlay the changed portion (config bytes 0-47, or melody bytes 48-175)
-3. Write 176 bytes (config + melody) at the EEPROM base address
-
-This matches how am32.ca writes settings (184 bytes as a single block at eeprom base).
-The ESC rejects writes of 256 bytes (NACK 0xC1), so we write 176 bytes (48+128).
-
-### Melody Format (Bluejay)
+## Melody Format (Bluejay)
 
 AM32 uses the Bluejay startup melody format, NOT a per-byte note encoding:
 - Bytes 0-1: BPM (big-endian u16)
