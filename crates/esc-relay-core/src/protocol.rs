@@ -25,20 +25,11 @@ pub enum CommandOp {
     /// Get relay version/info. Response: version string.
     Info = 0x01,
 
-    /// Enter DShot mode and send bootloader entry sequence.
-    /// Payload: [dshot_speed:1] (0=150, 1=300, 2=600, 3=1200)
-    EnterBootloader = 0x10,
-
-    /// Send raw DShot frame (for testing).
-    /// Payload: [frame_hi:1] [frame_lo:1] [count:1]
-    SendDshot = 0x11,
-
     /// Enter passthrough mode (transparent USB <-> UART bridge).
     /// The relay will forward all subsequent data to/from UART.
     EnterPassthrough = 0x20,
 
     /// Exit passthrough mode and return to command mode.
-    /// This is detected as a break condition or magic sequence.
     ExitPassthrough = 0x21,
 
     /// Reset relay to idle state.
@@ -51,8 +42,6 @@ impl CommandOp {
         match b {
             0x00 => Some(Self::Ping),
             0x01 => Some(Self::Info),
-            0x10 => Some(Self::EnterBootloader),
-            0x11 => Some(Self::SendDshot),
             0x20 => Some(Self::EnterPassthrough),
             0x21 => Some(Self::ExitPassthrough),
             0xFF => Some(Self::Reset),
@@ -75,7 +64,7 @@ pub enum Status {
     /// Invalid payload length or format.
     InvalidPayload = 0x02,
 
-    /// Operation failed (e.g., DShot send error).
+    /// Operation failed.
     Failed = 0x03,
 
     /// Relay is in wrong state for this command.
@@ -143,7 +132,7 @@ pub struct Response {
 
 impl Response {
     /// Create a success response with no payload.
-    pub fn ok() -> Self {
+    pub const fn ok() -> Self {
         Self {
             status: Status::Ok,
             payload: Vec::new(),
@@ -161,7 +150,7 @@ impl Response {
     }
 
     /// Create an error response.
-    pub fn error(status: Status) -> Self {
+    pub const fn error(status: Status) -> Self {
         Self {
             status,
             payload: Vec::new(),
@@ -192,39 +181,6 @@ fn compute_crc(data: &[u8]) -> u8 {
     data.iter().fold(0, |acc, &b| acc ^ b)
 }
 
-/// DShot speed setting for bootloader entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-#[repr(u8)]
-pub enum DshotSpeed {
-    Dshot150 = 0,
-    Dshot300 = 1,
-    Dshot600 = 2,
-    Dshot1200 = 3,
-}
-
-impl DshotSpeed {
-    pub const fn from_byte(b: u8) -> Option<Self> {
-        match b {
-            0 => Some(Self::Dshot150),
-            1 => Some(Self::Dshot300),
-            2 => Some(Self::Dshot600),
-            3 => Some(Self::Dshot1200),
-            _ => None,
-        }
-    }
-
-    /// Get the corresponding `esc_dshot::Speed`.
-    pub const fn to_dshot_speed(self) -> esc_dshot::Speed {
-        match self {
-            Self::Dshot150 => esc_dshot::Speed::DShot150,
-            Self::Dshot300 => esc_dshot::Speed::DShot300,
-            Self::Dshot600 => esc_dshot::Speed::DShot600,
-            Self::Dshot1200 => esc_dshot::Speed::DShot1200,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,17 +192,6 @@ mod tests {
         let cmd = Command::parse(&data).unwrap();
         assert_eq!(cmd.op, CommandOp::Ping);
         assert!(cmd.payload.is_empty());
-    }
-
-    #[test]
-    fn parse_enter_bootloader_command() {
-        // CMD=0x10, LEN=0x01, DATA=0x02 (Dshot600), CRC
-        let mut data = [0x10, 0x01, 0x02, 0x00];
-        data[3] = compute_crc(&data[..3]);
-
-        let cmd = Command::parse(&data).unwrap();
-        assert_eq!(cmd.op, CommandOp::EnterBootloader);
-        assert_eq!(cmd.payload.as_slice(), &[0x02]);
     }
 
     #[test]

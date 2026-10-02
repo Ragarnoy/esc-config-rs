@@ -136,7 +136,7 @@ impl FourWaySession {
     /// Force reset to disconnected state.
     ///
     /// Use this to recover from errors or start fresh.
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.state = FourWayState::Disconnected;
     }
 
@@ -147,7 +147,7 @@ impl FourWaySession {
     /// Get MSP_API_VERSION packet.
     ///
     /// Call when state == Disconnected.
-    pub fn api_version_command(&self) -> Result<[u8; 6], FourWaySessionError> {
+    pub const fn api_version_command(&self) -> Result<[u8; 6], FourWaySessionError> {
         match self.state {
             FourWayState::Disconnected => Ok(build_api_version_packet()),
             _ => Err(FourWaySessionError::InvalidState {
@@ -160,7 +160,7 @@ impl FourWaySession {
     /// Get MSP_SET_4WAY_IF packet.
     ///
     /// Call when state == FcConnected.
-    pub fn enter_passthrough_command(&self) -> Result<[u8; 6], FourWaySessionError> {
+    pub const fn enter_passthrough_command(&self) -> Result<[u8; 6], FourWaySessionError> {
         match self.state {
             FourWayState::FcConnected => Ok(build_set_4way_if_packet()),
             _ => Err(FourWaySessionError::InvalidState {
@@ -317,7 +317,7 @@ impl FourWaySession {
     ///
     /// **Important:** Always reboot the FC after exiting 4-way mode,
     /// otherwise it may hold the last throttle value!
-    pub fn reboot_fc_command(&self) -> [u8; 6] {
+    pub const fn reboot_fc_command(&self) -> [u8; 6] {
         // Can reboot anytime - no state check needed
         build_reboot_packet()
     }

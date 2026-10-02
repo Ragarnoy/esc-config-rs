@@ -17,3 +17,11 @@ Thumbs.db
 
 # Rust
 **/*.rs.bk
+
+# Test artifacts
+*.hex
+*.bin
+*.escfg
+
+# Session files
+.claude-session-context.md

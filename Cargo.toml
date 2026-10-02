@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "crates/esc-protocol",
-    "crates/esc-dshot",
     "crates/esc-configurator-cli",
     "crates/esc-relay-core",
     "crates/esc-relay-fw",
@@ -13,7 +12,6 @@ members = [
 # Build it explicitly with: cargo build -p esc-relay-fw --target thumbv8m.main-none-eabihf
 default-members = [
     "crates/esc-protocol",
-    "crates/esc-dshot",
     "crates/esc-configurator-cli",
     "crates/esc-relay-core",
     "crates/rtttl-rs",
@@ -32,6 +30,20 @@ clap = { version = "4", features = ["derive"] }
 anyhow = "1.0"
 serialport = "4.8"
 dialoguer = "0.12"
+embassy-rp = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
+embassy-time-driver = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
+embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
+embassy-usb = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
+
+[patch.crates-io]
+embassy-rp = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
+embassy-time-driver = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
+embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
 
 [profile.release]
 debug = 2

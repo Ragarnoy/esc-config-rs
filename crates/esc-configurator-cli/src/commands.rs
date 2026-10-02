@@ -11,7 +11,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use esc_protocol::am32_config::{Am32Config, Setting, apply_setting};
+use esc_protocol::am32_config::{Am32Config, Am32ConfigData, Setting, apply_setting};
 use esc_protocol::config::ConfigBlock;
 use esc_protocol::device::{DeviceInfo, FirmwareType};
 use esc_protocol::ihex::{load_firmware, Firmware};
@@ -26,7 +26,7 @@ use crate::ui::{
 };
 
 /// Format device info for display.
-fn format_device(info: &DeviceInfo) -> String {
+fn format_device(info: DeviceInfo) -> String {
     let firmware_name = match info.firmware {
         Some(FirmwareType::BlheliS) => "BLHeli_S",
         Some(FirmwareType::Am32) => "AM32",
@@ -68,12 +68,18 @@ pub fn interactive_config(device: Option<&str>) -> Result<()> {
     relay.connect()?;
 
     let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
+    println!("Connected: {}", format_device(*device_info));
 
     // Check if this is AM32
     if device_info.firmware != Some(FirmwareType::Am32) {
         relay.disconnect()?;
         bail!("Interactive config only supported for AM32 ESCs.");
+    }
+
+    if let Ok(name) = relay.read_esc_name()
+        && !name.is_empty()
+    {
+        println!("ESC firmware: {name}");
     }
 
     println!("Reading configuration...");
@@ -101,7 +107,7 @@ pub fn interactive_config(device: Option<&str>) -> Result<()> {
                 println!("\n{}", config);
             }
             MainMenuAction::EditSettings => {
-                if let Some(true) = edit_settings_loop(&mut config)? {
+                if edit_settings_loop(&mut config)? == Some(true) {
                     has_unsaved_changes = config.as_bytes() != original_config.as_bytes();
                 }
             }
@@ -201,8 +207,8 @@ fn handle_melody_menu(device: &str) -> Result<()> {
                         if data[0] == esc_protocol::MELODY_EMPTY {
                             println!("\nNo melody configured on ESC.");
                         } else if let Some(melody) = esc_protocol::Melody::from_bytes(&data) {
-                            println!("\nCurrent melody: {} notes", melody.len());
-                            println!("{}", melody);
+                            println!("\nCurrent melody: {} notes", melody.note_count());
+                            println!("{melody}");
                         } else {
                             println!("\nFailed to parse melody data.");
                         }
@@ -292,16 +298,14 @@ fn edit_settings_loop(config: &mut Am32Config) -> Result<Option<bool>> {
 
     loop {
         // Select category
-        let category = match select_category()? {
-            Some(c) => c,
-            None => return Ok(Some(modified)),
+        let Some(category) = select_category()? else {
+            return Ok(Some(modified));
         };
 
         // Select setting in category
         loop {
-            let (setting, name) = match select_setting_in_category(category, config)? {
-                Some(s) => s,
-                None => break, // Back to category selection
+            let Some((setting, name)) = select_setting_in_category(category, config)? else {
+                break; // Back to category selection
             };
 
             // Edit the setting
@@ -606,7 +610,7 @@ pub fn read_config(device: &str, output: Option<&str>) -> Result<()> {
     relay.connect()?;
 
     let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
+    println!("Connected: {}", format_device(*device_info));
 
     println!("Reading configuration...");
     let config = relay.read_config()?;
@@ -669,12 +673,45 @@ pub fn flash_firmware(device: &str, hex_file: &str) -> Result<()> {
     relay.connect()?;
 
     let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
+    println!("Connected: {}", format_device(*device_info));
 
     // Check if this is AM32
     if device_info.firmware != Some(FirmwareType::Am32) {
         relay.disconnect()?;
         bail!("Firmware flashing only supported for AM32 ESCs");
+    }
+
+    // Read ESC firmware name and verify MCU type matches HEX file
+    match relay.read_esc_name() {
+        Ok(esc_name) if !esc_name.is_empty() => {
+            println!("ESC firmware: {esc_name}");
+            // Extract MCU type from ESC name (last segment after '_')
+            if let Some(esc_mcu) = esc_name.rsplit('_').next() {
+                // Extract MCU type from HEX filename for comparison
+                let hex_basename = Path::new(hex_file)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                // HEX filenames look like "AM32_F4A_4IN1_F421_2.20"
+                // Strip version suffix (last segment with a dot) then take MCU type
+                let hex_parts: Vec<&str> = hex_basename.split('_').collect();
+                let hex_mcu = hex_parts.iter().rev()
+                    .find(|part| !part.contains('.'))
+                    .copied()
+                    .unwrap_or("");
+
+                if !hex_mcu.is_empty() && !hex_mcu.eq_ignore_ascii_case(esc_mcu) {
+                    relay.disconnect()?;
+                    bail!(
+                        "MCU type mismatch: ESC has '{}' but firmware is for '{}'. \
+                         Flashing wrong firmware can brick the ESC!",
+                        esc_mcu, hex_mcu
+                    );
+                }
+            }
+        }
+        Ok(_) => println!("ESC firmware name: (empty)"),
+        Err(e) => println!("Could not read ESC name: {e}"),
     }
 
     // Step 1: Clear boot byte (SAFETY)
@@ -689,7 +726,7 @@ pub fn flash_firmware(device: &str, hex_file: &str) -> Result<()> {
 
     // Step 2: Flash firmware in 128-byte chunks
     let chunk_size = 128usize;
-    let total_chunks = (binary.len() + chunk_size - 1) / chunk_size;
+    let total_chunks = binary.len().div_ceil(chunk_size);
     let max_retries = 8;
     let firmware_start: u16 = 0x1000; // AM32 firmware starts at 4KB (after bootloader)
 
@@ -700,6 +737,19 @@ pub fn flash_firmware(device: &str, hex_file: &str) -> Result<()> {
             .unwrap()
             .progress_chars("#>-"),
     );
+
+    // Step 2a: Erase flash pages before writing
+    let page_size: u16 = 1024; // AM32 uses 1KB pages
+    let first_page = firmware_start / page_size;
+    let last_page = (firmware_start + binary.len() as u16 - 1) / page_size;
+    let num_pages = last_page - first_page + 1;
+    println!("\nErasing {} pages (0x{:04X}-0x{:04X})...", num_pages, first_page * page_size, (last_page + 1) * page_size - 1);
+    for page in first_page..=last_page {
+        let page_addr = page * page_size;
+        relay.set_address(page_addr)?;
+        relay.erase_page()?;
+    }
+    println!("  Pages erased");
 
     println!("\nFlashing {} chunks to 0x{:04X}...", total_chunks, firmware_start);
 
@@ -741,6 +791,7 @@ pub fn flash_firmware(device: &str, hex_file: &str) -> Result<()> {
     pb.finish_with_message("done");
 
     // Step 3: Restore boot byte
+    // Preserve the original EEPROM (user settings), only re-enable boot.
     println!("\nFinalizing...");
     eeprom[0] = 0x01; // Enable boot
     relay.write_eeprom(&eeprom)?;
@@ -781,7 +832,7 @@ pub fn verify_firmware(device: &str, hex_file: &str) -> Result<()> {
     relay.connect()?;
 
     let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
+    println!("Connected: {}", format_device(*device_info));
 
     if device_info.firmware != Some(FirmwareType::Am32) {
         relay.disconnect()?;
@@ -790,7 +841,7 @@ pub fn verify_firmware(device: &str, hex_file: &str) -> Result<()> {
 
     // Verify in 256-byte chunks (more efficient reads)
     let chunk_size = 256usize;
-    let total_chunks = (binary.len() + chunk_size - 1) / chunk_size;
+    let total_chunks = binary.len().div_ceil(chunk_size);
     let firmware_start: u16 = 0x1000; // AM32 firmware starts at 4KB
 
     let pb = ProgressBar::new(total_chunks as u64);
@@ -842,7 +893,7 @@ pub fn backup_config(device: &str, output: &str) -> Result<()> {
     relay.connect()?;
 
     let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
+    println!("Connected: {}", format_device(*device_info));
 
     println!("Reading configuration...");
     let config = relay.read_config()?;
@@ -877,12 +928,86 @@ pub fn restore_config(device: &str, input: &str) -> Result<()> {
     relay.connect()?;
 
     let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
+    println!("Connected: {}", format_device(*device_info));
 
     println!("Writing configuration...");
     relay.write_config(&config)?;
 
     println!("Configuration restored from: {input}");
+
+    relay.disconnect()?;
+    println!("Disconnected.");
+
+    Ok(())
+}
+
+/// Export ESC configuration as TOML (AM32 only).
+pub fn export_config(device: &str, output: &str) -> Result<()> {
+    println!("Connecting to ESC via {device}...");
+    let mut relay = Relay::open(device)?;
+    relay.connect()?;
+
+    let device_info = relay.session().device().expect("should be connected");
+    println!("Connected: {}", format_device(*device_info));
+
+    if device_info.firmware != Some(FirmwareType::Am32) {
+        relay.disconnect()?;
+        bail!("TOML export only supported for AM32 ESCs.");
+    }
+
+    println!("Reading configuration...");
+    let config_block = relay.read_config()?;
+
+    let mut raw = [0u8; 256];
+    raw.copy_from_slice(config_block.as_bytes());
+    let config = Am32Config::from_bytes(raw);
+    let data = Am32ConfigData::from(&config);
+
+    let toml_string = toml::to_string_pretty(&data)
+        .context("failed to serialize config to TOML")?;
+
+    fs::write(output, &toml_string)
+        .with_context(|| format!("failed to write TOML to {output}"))?;
+
+    println!("Configuration exported to: {output}");
+
+    relay.disconnect()?;
+    println!("Disconnected.");
+
+    Ok(())
+}
+
+/// Import ESC configuration from TOML file (AM32 only).
+pub fn import_config(device: &str, input: &str) -> Result<()> {
+    if !Path::new(input).exists() {
+        bail!("TOML file not found: {input}");
+    }
+
+    let toml_string = fs::read_to_string(input)
+        .with_context(|| format!("failed to read {input}"))?;
+
+    let data: Am32ConfigData = toml::from_str(&toml_string)
+        .with_context(|| format!("failed to parse TOML from {input}"))?;
+
+    let config = Am32Config::from(&data);
+    let config_block = ConfigBlock::from_array(*config.as_bytes());
+
+    println!("Connecting to ESC via {device}...");
+    let mut relay = Relay::open(device)?;
+    relay.connect()?;
+
+    let device_info = relay.session().device().expect("should be connected");
+    println!("Connected: {}", format_device(*device_info));
+
+    if device_info.firmware != Some(FirmwareType::Am32) {
+        relay.disconnect()?;
+        bail!("TOML import only supported for AM32 ESCs.");
+    }
+
+    println!("Writing configuration...");
+    relay.write_config(&config_block)?;
+
+    println!("Configuration imported from: {input}");
 
     relay.disconnect()?;
     println!("Disconnected.");
@@ -975,7 +1100,7 @@ pub fn show_config(device: &str) -> Result<()> {
     relay.connect()?;
 
     let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
+    println!("Connected: {}", format_device(*device_info));
 
     // Check if this is AM32
     if device_info.firmware != Some(FirmwareType::Am32) {
@@ -1015,7 +1140,7 @@ pub fn set_config(device: &str, setting_name: &str, value: &str) -> Result<()> {
     relay.connect()?;
 
     let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
+    println!("Connected: {}", format_device(*device_info));
 
     // Check if this is AM32
     if device_info.firmware != Some(FirmwareType::Am32) {
@@ -1082,6 +1207,7 @@ pub fn list_settings() {
         ("servo-neutral", Setting::ServoNeutral),
         ("rc-car", Setting::RcCarReversing),
         ("hall", Setting::UseHallSensors),
+        ("signal", Setting::SignalType),
         ("sine-range", Setting::SineModeRange),
     ];
 
@@ -1094,6 +1220,59 @@ pub fn list_settings() {
     println!("  esc-configurator set -d /dev/ttyACM0 -s motor-kv -v 2200");
     println!("  esc-configurator set -d /dev/ttyACM0 -s direction -v on");
     println!("  esc-configurator set -d /dev/ttyACM0 -s timing -v 2");
+}
+
+/// Reset ESC configuration to sensible defaults.
+///
+/// This writes a default configuration suitable for most ESC setups.
+/// Useful after flashing new firmware when EEPROM may have bad data.
+pub fn reset_defaults(device: &str) -> Result<()> {
+    println!("Connecting to ESC via {device}...");
+
+    let mut relay = Relay::open(device)?;
+    relay.connect()?;
+
+    let device_info = relay.session().device().expect("should be connected");
+    println!("Connected: {}", format_device(*device_info));
+
+    // Check if this is AM32
+    if device_info.firmware != Some(FirmwareType::Am32) {
+        relay.disconnect()?;
+        bail!("Reset defaults only supported for AM32 ESCs.");
+    }
+
+    // Create default config
+    println!("Creating default configuration...");
+    let config = Am32Config::with_defaults();
+
+    // Show what we're about to write
+    println!();
+    println!("Default configuration:");
+    println!("  Signal Type:       Auto (accepts DShot)");
+    println!("  PWM Frequency:     24 kHz");
+    println!("  Motor Timing:      22.5° (Auto)");
+    println!("  Motor KV:          2000");
+    println!("  Motor Poles:       14");
+    println!("  Startup Power:     100%");
+    println!("  Beep Volume:       5");
+    println!("  Stuck Rotor Prot:  On");
+    println!("  Stall Protection:  On");
+    println!();
+
+    // Write config
+    let config_block = ConfigBlock::from_array(*config.as_bytes());
+    println!("Writing default configuration...");
+    relay.write_config(&config_block)?;
+
+    println!("Configuration reset to defaults!");
+    println!();
+    println!("The ESC should now accept DShot signals.");
+    println!("Power cycle the ESC and test with beep_test or motor_test.");
+
+    relay.disconnect()?;
+    println!("Disconnected.");
+
+    Ok(())
 }
 
 // ----------------------------------------------------------------------------
@@ -1143,7 +1322,7 @@ pub fn melody_download(device: &str, output: &str) -> Result<()> {
     relay.connect()?;
 
     let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
+    println!("Connected: {}", format_device(*device_info));
 
     if device_info.firmware != Some(FirmwareType::Am32) {
         relay.disconnect()?;
@@ -1161,7 +1340,7 @@ pub fn melody_download(device: &str, output: &str) -> Result<()> {
     } else {
         // Parse and display melody info
         if let Some(melody) = esc_protocol::Melody::from_bytes(&data) {
-            println!("Melody: {} notes", melody.len());
+            println!("Melody: {} notes", melody.note_count());
             println!("  {melody}");
         }
     }
@@ -1195,7 +1374,7 @@ pub fn melody_upload(device: &str, input: &str) -> Result<()> {
         let melody = esc_protocol::Melody::from_rtttl(text)
             .map_err(|e| anyhow::anyhow!("failed to parse RTTTL: {:?}", e))?;
 
-        println!("Uploading melody: {} notes", melody.len());
+        println!("Uploading melody: {} notes", melody.note_count());
         println!("  {melody}");
 
         melody.to_bytes()
@@ -1212,7 +1391,7 @@ pub fn melody_upload(device: &str, input: &str) -> Result<()> {
         if data[0] == esc_protocol::MELODY_EMPTY {
             println!("Warning: file contains empty melody (will clear ESC melody)");
         } else if let Some(melody) = esc_protocol::Melody::from_bytes(&data) {
-            println!("Uploading melody: {} notes", melody.len());
+            println!("Uploading melody: {} notes", melody.note_count());
             println!("  {melody}");
         }
 
@@ -1226,7 +1405,7 @@ pub fn melody_upload(device: &str, input: &str) -> Result<()> {
     relay.connect()?;
 
     let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
+    println!("Connected: {}", format_device(*device_info));
 
     if device_info.firmware != Some(FirmwareType::Am32) {
         relay.disconnect()?;
@@ -1249,7 +1428,7 @@ pub fn melody_clear(device: &str) -> Result<()> {
     relay.connect()?;
 
     let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
+    println!("Connected: {}", format_device(*device_info));
 
     if device_info.firmware != Some(FirmwareType::Am32) {
         relay.disconnect()?;
@@ -1308,7 +1487,8 @@ pub fn melody_info(file: &str) -> Result<()> {
 
         match esc_protocol::Melody::from_rtttl(text) {
             Ok(melody) => {
-                println!("Notes: {}", melody.len());
+                println!("Notes: {}", melody.note_count());
+                println!("Entries: {} (count, freq_index) pairs", melody.len());
                 println!();
                 println!("Melody: {melody}");
                 println!();
@@ -1323,7 +1503,7 @@ pub fn melody_info(file: &str) -> Result<()> {
     }
 
     // Binary format
-    println!("Format: Binary");
+    println!("Format: Binary (Bluejay)");
 
     if data[0] == esc_protocol::MELODY_EMPTY {
         println!("Status: No melody (first byte is 0xFF)");
@@ -1331,7 +1511,9 @@ pub fn melody_info(file: &str) -> Result<()> {
     }
 
     if let Some(melody) = esc_protocol::Melody::from_bytes(&data) {
-        println!("Notes: {}", melody.len());
+        println!("BPM: {}", melody.bpm());
+        println!("Notes: {}", melody.note_count());
+        println!("Entries: {} (count, freq_index) pairs", melody.len());
         println!();
         println!("Melody: {melody}");
         println!();
@@ -1344,18 +1526,21 @@ pub fn melody_info(file: &str) -> Result<()> {
     Ok(())
 }
 
-/// Print detailed note breakdown.
+/// Print detailed entry breakdown.
 fn print_melody_details(melody: &esc_protocol::Melody) {
-    println!("Note details:");
-    for (i, note) in melody.notes().iter().enumerate() {
-        println!(
-            "  [{:2}] {:<4} octave {} {:>7} (0x{:02X})",
-            i,
-            note.note.name(),
-            note.real_octave(),
-            note.duration.name(),
-            note.to_byte()
-        );
+    println!("Entry details:");
+    for (i, entry) in melody.entries().iter().enumerate() {
+        if entry.is_pause() {
+            println!("  [{:2}] PAUSE  {}ms", i, entry.count);
+        } else {
+            println!(
+                "  [{:2}] count={:3}  freq_idx={:3}  (~{:.1} Hz)",
+                i,
+                entry.count,
+                entry.freq_index,
+                entry.frequency()
+            );
+        }
     }
 }
 
@@ -1377,7 +1562,7 @@ pub fn melody_convert(input: &str, output: &str) -> Result<()> {
     if let Some(name) = esc_protocol::Melody::rtttl_name(text) {
         println!("Converting: {name}");
     }
-    println!("Notes: {}", melody.len());
+    println!("Notes: {}", melody.note_count());
 
     let bytes = melody.to_bytes();
     fs::write(output, bytes).with_context(|| format!("failed to write {output}"))?;

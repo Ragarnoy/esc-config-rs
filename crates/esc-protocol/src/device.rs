@@ -63,6 +63,22 @@ impl DeviceInfo {
     pub const fn is_supported(&self) -> bool {
         self.firmware.is_some()
     }
+
+    /// Get the EEPROM/config base address for this device.
+    ///
+    /// The high byte of the device_id corresponds to the MCU type:
+    /// - 0x1F (STM32F051): 0x7C00
+    /// - 0x2B (STM32G071): 0x7E00
+    /// - 0x35 (AT32F421/STM32F3xx): 0xF800
+    /// - Others (SiLabs, GD32, etc.): 0x7C00 (default)
+    pub const fn eeprom_offset(&self) -> u16 {
+        let mcu_type = (self.device_id >> 8) as u8;
+        match mcu_type {
+            0x2B => 0x7E00, // STM32G071
+            0x35 => 0xF800, // AT32F421 / STM32F3xx
+            _ => 0x7C00,    // STM32F051, SiLabs, and others
+        }
+    }
 }
 
 /// Classify a device by its ID from the connect response.
@@ -228,6 +244,26 @@ mod tests {
         // Random device should not match
         assert!(!might_be_blheli32(0x1234));
     }
+
+    // Compile-time verification of eeprom_offset mapping.
+    // eeprom_offset only depends on device_id, so we can construct DeviceInfo directly.
+    const _: () = {
+        const fn eeprom(device_id: u16) -> u16 {
+            DeviceInfo { device_id, bootloader: BootloaderType::Arm, firmware: None }.eeprom_offset()
+        }
+        // STM32F051 variants → 0x7C00
+        assert!(eeprom(0x1F02) == 0x7C00);
+        assert!(eeprom(0x1F06) == 0x7C00);
+        // STM32G071 → 0x7E00
+        assert!(eeprom(0x2B06) == 0x7E00);
+        // AT32F421 / STM32F3xx → 0xF800
+        assert!(eeprom(0x3506) == 0xF800);
+        // Other ARM devices default to 0x7C00
+        assert!(eeprom(0x3306) == 0x7C00);
+        assert!(eeprom(0x4706) == 0x7C00);
+        // SiLabs devices → 0x7C00
+        assert!(eeprom(0xF390) == 0x7C00);
+    };
 
     #[test]
     fn all_known_sil_devices_supported() {

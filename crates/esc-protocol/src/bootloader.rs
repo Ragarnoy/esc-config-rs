@@ -92,7 +92,7 @@ impl Session {
     /// Get keepalive packet bytes.
     ///
     /// Call this when connected to prevent timeout.
-    pub fn keepalive_command(&self) -> Result<[u8; 4], ProtocolError> {
+    pub const fn keepalive_command(&self) -> Result<[u8; 4], ProtocolError> {
         if !self.is_connected() {
             return Err(ProtocolError::NotConnected);
         }
@@ -100,7 +100,7 @@ impl Session {
     }
 
     /// Get disconnect packet bytes.
-    pub fn disconnect_command(&self) -> Result<[u8; 4], ProtocolError> {
+    pub const fn disconnect_command(&self) -> Result<[u8; 4], ProtocolError> {
         if !self.is_connected() {
             return Err(ProtocolError::NotConnected);
         }
@@ -118,7 +118,7 @@ impl Session {
     /// Get read-256 packet bytes.
     ///
     /// Must have address set first.
-    pub fn read_256_command(&self) -> Result<[u8; 4], ProtocolError> {
+    pub const fn read_256_command(&self) -> Result<[u8; 4], ProtocolError> {
         match self.state {
             State::AddressSet { .. } => Ok(build_read_256_packet()),
             State::Connected => Err(ProtocolError::AddressNotSet),
@@ -129,7 +129,7 @@ impl Session {
     /// Get read-16 packet bytes.
     ///
     /// Must have address set first.
-    pub fn read_16_command(&self) -> Result<[u8; 4], ProtocolError> {
+    pub const fn read_16_command(&self) -> Result<[u8; 4], ProtocolError> {
         match self.state {
             State::AddressSet { .. } => Ok(build_read_16_packet()),
             State::Connected => Err(ProtocolError::AddressNotSet),
@@ -141,7 +141,7 @@ impl Session {
     ///
     /// Must have address set first. After sending this, send 256 data bytes + 2 CRC bytes.
     /// Note: The ESC does NOT ACK the header - it waits for the full data + CRC before responding.
-    pub fn write_header_command(&self) -> Result<[u8; 6], ProtocolError> {
+    pub const fn write_header_command(&self) -> Result<[u8; 6], ProtocolError> {
         match self.state {
             State::AddressSet { .. } => Ok(build_write_header_packet()),
             State::Connected => Err(ProtocolError::AddressNotSet),
@@ -152,7 +152,7 @@ impl Session {
     /// Get write page packet bytes (short format for AM32).
     ///
     /// Must have address set first. After sending this, wait for ACK, then send data + CRC.
-    pub fn write_page_command(&self) -> Result<[u8; 4], ProtocolError> {
+    pub const fn write_page_command(&self) -> Result<[u8; 4], ProtocolError> {
         match self.state {
             State::AddressSet { .. } => Ok(build_write_page_packet()),
             State::Connected => Err(ProtocolError::AddressNotSet),
@@ -170,7 +170,7 @@ impl Session {
     ///
     /// Erases the flash page at the currently set address.
     /// Must have address set first.
-    pub fn erase_page_command(&self) -> Result<[u8; 4], ProtocolError> {
+    pub const fn erase_page_command(&self) -> Result<[u8; 4], ProtocolError> {
         match self.state {
             State::AddressSet { .. } => Ok(build_erase_page_packet()),
             State::Connected => Err(ProtocolError::AddressNotSet),
@@ -181,7 +181,7 @@ impl Session {
     /// Get commit packet bytes.
     ///
     /// Call after write to commit changes to flash.
-    pub fn commit_command(&self) -> Result<[u8; 4], ProtocolError> {
+    pub const fn commit_command(&self) -> Result<[u8; 4], ProtocolError> {
         if !self.is_connected() {
             return Err(ProtocolError::NotConnected);
         }
@@ -221,7 +221,7 @@ impl Session {
     }
 
     /// Process keepalive response (single byte).
-    pub fn handle_keepalive_response(&self, byte: u8) -> Result<(), ProtocolError> {
+    pub const fn handle_keepalive_response(&self, byte: u8) -> Result<(), ProtocolError> {
         if !self.is_connected() {
             return Err(ProtocolError::NotConnected);
         }
@@ -233,7 +233,7 @@ impl Session {
     }
 
     /// Process ACK response (single byte).
-    pub fn handle_ack_response(&self, byte: u8) -> Result<(), ProtocolError> {
+    pub const fn handle_ack_response(&self, byte: u8) -> Result<(), ProtocolError> {
         if is_ack(byte) {
             Ok(())
         } else {
@@ -242,7 +242,7 @@ impl Session {
     }
 
     /// Process set-address ACK and update state.
-    pub fn handle_set_address_response(
+    pub const fn handle_set_address_response(
         &mut self,
         byte: u8,
         address: u16,
@@ -262,7 +262,7 @@ impl Session {
     ///
     /// Accepts both ACK (0x30) and KEEPALIVE_ACK (0xC1) since some ESCs
     /// (particularly AM32) may respond with either.
-    pub fn handle_disconnect_response(&mut self, byte: u8) -> Result<(), ProtocolError> {
+    pub const fn handle_disconnect_response(&mut self, byte: u8) -> Result<(), ProtocolError> {
         if is_ack(byte) || is_keepalive_ack(byte) {
             self.state = State::Disconnected;
             self.device = None;
@@ -303,7 +303,7 @@ impl Session {
     /// Force reset to disconnected state.
     ///
     /// Use after communication errors or timeouts.
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.state = State::Disconnected;
         self.device = None;
     }
@@ -389,7 +389,7 @@ impl ReadConfigOp {
     /// Get the next command to send.
     ///
     /// Returns `None` when operation is complete.
-    pub fn next_command(&self) -> Option<ReadConfigCommand> {
+    pub const fn next_command(&self) -> Option<ReadConfigCommand> {
         match self.step {
             ReadConfigStep::SetAddress => Some(ReadConfigCommand::SetAddress(ADDR_CONFIG)),
             ReadConfigStep::Read => Some(ReadConfigCommand::Read256),
@@ -398,7 +398,7 @@ impl ReadConfigOp {
     }
 
     /// Advance to next step after successful response.
-    pub fn advance(&mut self) {
+    pub const fn advance(&mut self) {
         self.step = match self.step {
             ReadConfigStep::SetAddress => ReadConfigStep::Read,
             ReadConfigStep::Read => ReadConfigStep::Done,

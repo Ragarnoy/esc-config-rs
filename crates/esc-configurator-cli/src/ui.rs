@@ -100,7 +100,7 @@ impl SettingCategory {
     }
 
     /// Get settings in this category.
-    pub fn settings(self) -> &'static [(Setting, &'static str)] {
+    pub const fn settings(self) -> &'static [(Setting, &'static str)] {
         match self {
             Self::Motor => &[
                 (Setting::DirectionReversed, "direction"),
@@ -385,7 +385,7 @@ fn on_off(value: bool) -> String {
 /// Edit a boolean setting.
 pub fn edit_bool_setting(setting_name: &str, current: bool) -> Result<Option<bool>> {
     let items = ["Off", "On"];
-    let default_idx = if current { 1 } else { 0 };
+    let default_idx = usize::from(current);
 
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("{} (current: {})", setting_name, items[default_idx]))
@@ -399,7 +399,7 @@ pub fn edit_bool_setting(setting_name: &str, current: bool) -> Result<Option<boo
 /// Edit a direction setting (special case for reversed).
 pub fn edit_direction_setting(current_reversed: bool) -> Result<Option<bool>> {
     let items = ["Normal", "Reversed"];
-    let default_idx = if current_reversed { 1 } else { 0 };
+    let default_idx = usize::from(current_reversed);
 
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("Motor Direction (current: {})", items[default_idx]))

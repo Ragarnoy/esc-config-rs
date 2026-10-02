@@ -278,7 +278,7 @@ impl<'a> Rtttl<'a> {
     }
 
     /// Get an iterator over the notes.
-    pub fn notes(&self) -> NoteIterator<'a> {
+    pub const fn notes(&self) -> NoteIterator<'a> {
         NoteIterator {
             remaining: self.notes_str,
             default_duration: self.default_duration,
@@ -305,7 +305,7 @@ pub struct NoteIterator<'a> {
     default_octave: u8,
 }
 
-impl<'a> Iterator for NoteIterator<'a> {
+impl Iterator for NoteIterator<'_> {
     type Item = RtttlNote;
 
     fn next(&mut self) -> Option<Self::Item> {

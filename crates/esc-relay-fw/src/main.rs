@@ -108,7 +108,12 @@ async fn main(spawner: Spawner) {
     // USB CDC Setup
     let driver = Driver::new(p.USB, Irqs);
 
-    let mut config = Config::new(0x1209, 0x0001); // Use test VID/PID
+    // VID 0x0403 (FTDI) so am32.ca detects this as a direct-connect device
+    // and speaks AM32 bootloader protocol directly instead of MSP/4way-if.
+    // Using a PID (0x0001) not in the ftdi_sio driver's ID table so Linux
+    // uses the generic cdc_acm driver instead of fighting with ftdi_sio.
+    // (Previously used CH340 VID 0x1A86 but Linux's ch341 driver claimed it.)
+    let mut config = Config::new(0x0403, 0x0001);
     config.manufacturer = Some("ESC-Config");
     config.product = Some("ESC Relay");
     config.serial_number = Some("001");
@@ -134,7 +139,7 @@ async fn main(spawner: Spawner) {
     let cdc_class = CdcAcmClass::new(&mut builder, cdc_state, 64);
 
     let usb = builder.build();
-    spawner.spawn(usb_task(usb)).unwrap();
+    spawner.spawn(usb_task(usb).unwrap());
 
     // PIO one-wire UART for ESC communication
     let Pio {
@@ -143,14 +148,14 @@ async fn main(spawner: Spawner) {
         sm1,
         ..
     } = Pio::new(p.PIO0, Irqs);
-    let pio_pin = common.make_pio_pin(p.PIN_0);
+    let pio_pin = common.make_pio_pin(p.PIN_15);
     let uart = onewire_uart::OneWireUart::new_with_pin(&mut common, sm0, sm1, pio_pin, 19200);
 
     // Start tasks
     let (cdc_tx, cdc_rx) = cdc_class.split();
-    spawner.spawn(usb_rx_task(cdc_rx)).unwrap();
-    spawner.spawn(usb_tx_task(cdc_tx)).unwrap();
-    spawner.spawn(esc_task(uart)).unwrap();
+    spawner.spawn(usb_rx_task(cdc_rx).unwrap());
+    spawner.spawn(usb_tx_task(cdc_tx).unwrap());
+    spawner.spawn(esc_task(uart).unwrap());
 
     loop {
         Timer::after_secs(60).await;
@@ -179,30 +184,34 @@ async fn esc_task(mut uart: onewire_uart::OneWireUart<'static, PIO0, 0, 1>) {
         tx_len = pkt.len;
         tx_buf[..tx_len].copy_from_slice(pkt.as_slice());
 
-        // Aggregate multi-packet transfers (writes span multiple USB packets)
-        let should_aggregate = tx_len == 64 || tx_buf[0] == 0xFF;
-        if should_aggregate {
-            loop {
-                match with_timeout(Duration::from_millis(50), USB_TO_ESC.receive()).await {
-                    Ok(pkt) => {
-                        let new_len = tx_len + pkt.len;
-                        if new_len <= tx_buf.len() {
-                            tx_buf[tx_len..new_len].copy_from_slice(pkt.as_slice());
-                            tx_len = new_len;
-                        } else {
-                            break;
-                        }
+        // Aggregate USB packets: Web Serial API / USB CDC can fragment writes
+        // at arbitrary boundaries. Wait briefly for more data to reassemble
+        // complete protocol commands before forwarding to ESC.
+        // 2ms is enough to catch fragments from a single write (~1ms USB latency)
+        // but short enough to not merge separate sequential commands (~20ms+ apart).
+        loop {
+            match with_timeout(Duration::from_millis(2), USB_TO_ESC.receive()).await {
+                Ok(pkt) => {
+                    let new_len = tx_len + pkt.len;
+                    if new_len <= tx_buf.len() {
+                        tx_buf[tx_len..new_len].copy_from_slice(pkt.as_slice());
+                        tx_len = new_len;
+                    } else {
+                        break;
                     }
-                    Err(_) => break,
                 }
+                Err(_) => break,
             }
         }
 
-        // Detect write transaction: set_addr (6) + write_hdr (3) + data
-        let is_write_combo = tx_len >= 9
+        // Detect write transaction: set_addr (6) + set_buffer (6) + data + crc (2+)
+        // CLI batches these together. Strict check to avoid false matches on raw data.
+        let is_write_combo = tx_len >= 14
             && tx_buf[0] == 0xFF
             && tx_buf[1] == 0x00
-            && tx_buf[6] == 0xFE;
+            && tx_buf[6] == 0xFE
+            && tx_buf[7] == 0x00
+            && tx_buf[8] == 0x00;
 
         if is_write_combo {
             // Handle write atomically to avoid USB latency issues
@@ -216,6 +225,9 @@ async fn esc_task(mut uart: onewire_uart::OneWireUart<'static, PIO0, 0, 1>) {
             // 1. Send set_addr to ESC → expect ACK
             // 2. Send set_buffer to ESC → NO ACK (AM32 quirk)
             // 3. Send data + our CRC to ESC → expect ACK
+
+            // Echo transmitted bytes back to host first
+            ESC_TO_USB.send(DataPacket::new(&tx_buf[..tx_len])).await;
 
             let mut resp_buf = [0u8; 8];
             let mut resp_len = 0usize;
@@ -275,21 +287,103 @@ async fn esc_task(mut uart: onewire_uart::OneWireUart<'static, PIO0, 0, 1>) {
         }
 
         // Check if this is a set_buffer command (0xFE) - NO ACK expected
-        // Must forward quickly so ESC receives data without timeout
-        let is_set_buffer = tx_len >= 1 && tx_buf[0] == 0xFE;
+        // Strict check: exactly 6 bytes [0xFE, 0x00, 0x00, SIZE, CRC_L, CRC_H]
+        // to avoid false matches on raw firmware data starting with 0xFE.
+        //
+        // After SetBuffer, the ESC expects the data payload immediately.
+        // We must handle SetBuffer → Data atomically to avoid USB latency
+        // causing the ESC to timeout between the two commands.
+        let is_set_buffer = tx_len == 6
+            && tx_buf[0] == 0xFE
+            && tx_buf[1] == 0x00
+            && tx_buf[2] == 0x00;
         if is_set_buffer {
-            uart.write(&tx_buf[..tx_len]).await;
-            // No response expected from set_buffer, don't wait
+            // Parse expected data size from SetBuffer command
+            let data_size = if tx_buf[3] == 0 { 256usize } else { tx_buf[3] as usize };
+
+            // Echo the SetBuffer command
+            ESC_TO_USB.send(DataPacket::new(&tx_buf[..tx_len])).await;
+
+            // Wait for the data payload from USB (data + CRC = data_size + 2 bytes)
+            let expected = data_size + 2;
+            let mut data_buf = [0u8; 300];
+            let mut data_len = 0usize;
+            let data_deadline = Duration::from_millis(500);
+            let deadline_start = embassy_time::Instant::now();
+
+            while data_len < expected {
+                let remaining = data_deadline
+                    .checked_sub(deadline_start.elapsed())
+                    .unwrap_or(Duration::from_ticks(0));
+                if remaining.as_ticks() == 0 {
+                    break;
+                }
+                match with_timeout(remaining, USB_TO_ESC.receive()).await {
+                    Ok(pkt) => {
+                        let new_len = (data_len + pkt.len).min(data_buf.len());
+                        data_buf[data_len..new_len]
+                            .copy_from_slice(&pkt.as_slice()[..new_len - data_len]);
+                        data_len = new_len;
+                    }
+                    Err(_) => break,
+                }
+            }
+
+            if data_len < expected {
+                warn!(
+                    "SetBuffer: incomplete data, got {} expected {}",
+                    data_len, expected
+                );
+                uart.switch_to_tx_idle();
+                continue;
+            }
+
+            // Send SetBuffer to ESC (no ACK expected)
+            uart.write(&tx_buf[..6]).await;
+
+            // Send data + CRC to ESC atomically after SetBuffer
+            // Recompute CRC from the actual data (ignore client CRC)
+            let data_crc = crc16_ibm(&data_buf[..data_size]);
+            Timer::after_millis(1).await;
+            uart.write(&data_buf[..data_size]).await;
+            let crc_bytes = [data_crc as u8, (data_crc >> 8) as u8];
+            uart.write(&crc_bytes).await;
+
+            // Wait for ESC ACK
+            let timeout_ms = if data_size > 64 { 200 } else { 100 };
+            let n = uart.read_exact_with_timeout(&mut rx_buf, 1, timeout_ms).await;
+
+            // Echo the data payload + ESC response
+            let mut resp = [0u8; MAX_RESPONSE_SIZE];
+            let echo_len = data_len.min(MAX_RESPONSE_SIZE);
+            resp[..echo_len].copy_from_slice(&data_buf[..echo_len]);
+            let resp_n = n.min(MAX_RESPONSE_SIZE - echo_len);
+            if resp_n > 0 {
+                resp[echo_len..echo_len + resp_n].copy_from_slice(&rx_buf[..resp_n]);
+            }
+            ESC_TO_USB
+                .send(DataPacket::new(&resp[..echo_len + resp_n]))
+                .await;
             uart.switch_to_tx_idle();
             continue;
         }
 
         // Normal passthrough path
+        // Echo transmitted bytes back to host (one-wire: TX appears on RX)
+        // then append the ESC's response.
+        // Use 500ms initial timeout for slow operations (page erase, flash commit).
+        info!("PASS: {} bytes, first=0x{:02X}", tx_len, tx_buf[0]);
         uart.write(&tx_buf[..tx_len]).await;
-        let n = uart.read_with_timeout(&mut rx_buf, 200).await;
-        if n > 0 {
-            ESC_TO_USB.send(DataPacket::new(&rx_buf[..n])).await;
-        }
+        let n = uart.read_with_timeout(&mut rx_buf, 500).await;
+        info!("PASS: got {} bytes back", n);
+
+        // Build combined response: echo + ESC response
+        let mut combined = [0u8; MAX_RESPONSE_SIZE];
+        let echo_len = tx_len.min(MAX_RESPONSE_SIZE);
+        combined[..echo_len].copy_from_slice(&tx_buf[..echo_len]);
+        let resp_len = n.min(MAX_RESPONSE_SIZE - echo_len);
+        combined[echo_len..echo_len + resp_len].copy_from_slice(&rx_buf[..resp_len]);
+        ESC_TO_USB.send(DataPacket::new(&combined[..echo_len + resp_len])).await;
         uart.switch_to_tx_idle();
     }
 }

@@ -57,6 +57,9 @@ pub const OP_READ_256: [u8; 2] = [0x03, 0x00];
 /// Read opcode for 16 bytes.
 pub const OP_READ_16: [u8; 2] = [0x03, 0x10];
 
+/// Read opcode for 32 bytes (ESC file name).
+pub const OP_READ_32: [u8; 2] = [0x03, 0x20];
+
 /// Read opcode for 48 bytes (used by Arduino before write).
 pub const OP_READ_48: [u8; 2] = [0x03, 0x30];
 
@@ -105,6 +108,9 @@ pub const CRC_READ_256: u16 = 0xF000;
 
 /// CRC of read 16 bytes opcode.
 pub const CRC_READ_16: u16 = 0x3C01;
+
+/// CRC of read 32 bytes opcode.
+pub const CRC_READ_32: u16 = 0x2801;
 
 /// CRC of read 48 bytes opcode.
 pub const CRC_READ_48: u16 = 0xE400;
@@ -212,6 +218,20 @@ pub const fn build_read_16_packet() -> [u8; 4] {
         OP_READ_16[1],
         CRC_READ_16 as u8,        // LSB = 0x01
         (CRC_READ_16 >> 8) as u8, // MSB = 0x3C
+    ]
+}
+
+/// Build read packet for 32 bytes.
+///
+/// Format: [03 20] + CRC = [03 20 01 28]
+/// Used to read ESC file name (stored 32 bytes before eeprom offset).
+#[inline]
+pub const fn build_read_32_packet() -> [u8; 4] {
+    [
+        OP_READ_32[0],
+        OP_READ_32[1],
+        CRC_READ_32 as u8,        // LSB = 0x01
+        (CRC_READ_32 >> 8) as u8, // MSB = 0x28
     ]
 }
 

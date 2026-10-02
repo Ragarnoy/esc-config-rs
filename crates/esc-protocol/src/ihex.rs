@@ -107,17 +107,17 @@ impl RecordData {
     }
 
     /// Get the number of data bytes.
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.len
     }
 
     /// Check if empty.
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
 
     /// Push a byte. Returns false if full.
-    fn push(&mut self, byte: u8) -> bool {
+    const fn push(&mut self, byte: u8) -> bool {
         if self.len < MAX_RECORD_DATA {
             self.data[self.len] = byte;
             self.len += 1;
@@ -371,12 +371,12 @@ mod std_ext {
 
     impl Segment {
         /// End address (exclusive) of this segment.
-        pub fn end_address(&self) -> u32 {
+        pub const fn end_address(&self) -> u32 {
             self.start_address + self.data.len() as u32
         }
 
         /// Check if an address falls within this segment.
-        pub fn contains(&self, address: u32) -> bool {
+        pub const fn contains(&self, address: u32) -> bool {
             address >= self.start_address && address < self.end_address()
         }
     }

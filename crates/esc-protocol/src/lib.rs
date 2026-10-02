@@ -17,8 +17,7 @@ pub use am32_config::Am32ConfigData;
 
 pub mod melody;
 pub use melody::{
-    Duration, Melody, MelodyNote, Note, RtttlError, MELODY_EMPTY, MELODY_MAX_NOTES, MELODY_OFFSET,
-    MELODY_SIZE,
+    Melody, MelodyEntry, RtttlError, MELODY_EMPTY, MELODY_MAX_NOTES, MELODY_OFFSET, MELODY_SIZE,
 };
 
 pub mod bootloader;

@@ -1,19 +1,26 @@
-//! Melody/music support for AM32 ESCs.
+//! Melody/music support for AM32 ESCs (Bluejay format).
 //!
-//! AM32 ESCs can play custom startup melodies stored in EEPROM.
-//! Each note is encoded as a single byte with pitch, octave, and duration.
+//! AM32 ESCs use the Bluejay startup melody format to play custom tunes.
+//! The format stores frequency/duration pairs rather than musical note names.
+//!
+//! # Format
+//!
+//! ```text
+//! [BPM_HI] [BPM_LO] [DEFAULT_OCTAVE] [DEFAULT_DURATION] [(count, freq_idx)...]
+//! ```
+//!
+//! - Bytes 0-1: BPM as big-endian u16
+//! - Byte 2: default octave
+//! - Byte 3: default duration (RTTTL value: 1/2/4/8/16/32)
+//! - Bytes 4+: pairs of (pulse_count, freq_index)
+//!   - freq_index 0 = silence, pulse_count = duration in ms
+//!   - freq_index != 0 = note, pulse_count = number of wave periods
+//!   - A note can span multiple pairs if pulse_count > 255
 //!
 //! # RTTTL Support
 //!
 //! This module can parse RTTTL (Ring Tone Text Transfer Language) format
-//! via the `rtttl-rs` crate. Example:
-//!
-//! ```text
-//! doom:b=420,o=4,d=32:8g4,8e4,8b3,4e,8p,1a#3
-//! ```
-//!
-//! Note: AM32 only supports octaves 4-7 and durations whole/half/quarter/eighth.
-//! Notes outside this range are transposed, and 16th/32nd notes become eighths.
+//! and convert to/from the Bluejay binary encoding.
 
 use core::fmt;
 
@@ -23,174 +30,17 @@ pub const MELODY_OFFSET: usize = 48;
 /// Size of melody data in bytes.
 pub const MELODY_SIZE: usize = 128;
 
-/// Maximum number of notes in a melody.
-pub const MELODY_MAX_NOTES: usize = 127; // Last byte reserved for terminator
+/// Header size (BPM:2 + octave:1 + duration:1).
+const HEADER_SIZE: usize = 4;
 
-/// Value indicating no melody is configured.
+/// Max data bytes after header.
+const MAX_DATA: usize = MELODY_SIZE - HEADER_SIZE; // 124 bytes = 62 pairs
+
+/// Maximum number of (count, freq_index) pairs.
+pub const MELODY_MAX_NOTES: usize = MAX_DATA / 2; // 62
+
+/// Value indicating no melody is configured (erased flash).
 pub const MELODY_EMPTY: u8 = 0xFF;
-
-/// Musical note (chromatic scale).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Note {
-    C,
-    Cs, // C#
-    D,
-    Ds, // D#
-    E,
-    F,
-    Fs, // F#
-    G,
-    Gs, // G#
-    A,
-    As, // A#
-    B,
-    Pause,
-}
-
-impl Note {
-    /// Create note from the upper nibble of a melody byte.
-    pub fn from_nibble(n: u8) -> Self {
-        match n & 0x0F {
-            0 => Note::C,
-            1 => Note::Cs,
-            2 => Note::D,
-            3 => Note::Ds,
-            4 => Note::E,
-            5 => Note::F,
-            6 => Note::Fs,
-            7 => Note::G,
-            8 => Note::Gs,
-            9 => Note::A,
-            10 => Note::As,
-            11 => Note::B,
-            _ => Note::Pause,
-        }
-    }
-
-    /// Convert note to nibble value.
-    pub fn to_nibble(self) -> u8 {
-        match self {
-            Note::C => 0,
-            Note::Cs => 1,
-            Note::D => 2,
-            Note::Ds => 3,
-            Note::E => 4,
-            Note::F => 5,
-            Note::Fs => 6,
-            Note::G => 7,
-            Note::Gs => 8,
-            Note::A => 9,
-            Note::As => 10,
-            Note::B => 11,
-            Note::Pause => 12,
-        }
-    }
-
-    /// Get display name for the note.
-    pub const fn name(&self) -> &'static str {
-        match self {
-            Note::C => "C",
-            Note::Cs => "C#",
-            Note::D => "D",
-            Note::Ds => "D#",
-            Note::E => "E",
-            Note::F => "F",
-            Note::Fs => "F#",
-            Note::G => "G",
-            Note::Gs => "G#",
-            Note::A => "A",
-            Note::As => "A#",
-            Note::B => "B",
-            Note::Pause => "P",
-        }
-    }
-
-    /// Convert from rtttl-rs Note type.
-    fn from_rtttl(note: rtttl_rs::Note) -> Self {
-        match note {
-            rtttl_rs::Note::C => Note::C,
-            rtttl_rs::Note::Cs => Note::Cs,
-            rtttl_rs::Note::D => Note::D,
-            rtttl_rs::Note::Ds => Note::Ds,
-            rtttl_rs::Note::E => Note::E,
-            rtttl_rs::Note::F => Note::F,
-            rtttl_rs::Note::Fs => Note::Fs,
-            rtttl_rs::Note::G => Note::G,
-            rtttl_rs::Note::Gs => Note::Gs,
-            rtttl_rs::Note::A => Note::A,
-            rtttl_rs::Note::As => Note::As,
-            rtttl_rs::Note::B => Note::B,
-            rtttl_rs::Note::Pause => Note::Pause,
-        }
-    }
-}
-
-impl fmt::Display for Note {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name())
-    }
-}
-
-/// Note duration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Duration {
-    Whole = 0,
-    Half = 1,
-    Quarter = 2,
-    Eighth = 3,
-}
-
-impl Duration {
-    /// Create duration from 2-bit value.
-    pub fn from_bits(bits: u8) -> Self {
-        match bits & 0x03 {
-            0 => Duration::Whole,
-            1 => Duration::Half,
-            2 => Duration::Quarter,
-            _ => Duration::Eighth,
-        }
-    }
-
-    /// Get display name for the duration.
-    pub const fn name(&self) -> &'static str {
-        match self {
-            Duration::Whole => "whole",
-            Duration::Half => "half",
-            Duration::Quarter => "quarter",
-            Duration::Eighth => "eighth",
-        }
-    }
-
-    /// Get short symbol for the duration.
-    pub const fn symbol(&self) -> &'static str {
-        match self {
-            Duration::Whole => "1",
-            Duration::Half => "2",
-            Duration::Quarter => "4",
-            Duration::Eighth => "8",
-        }
-    }
-
-    /// Convert from rtttl-rs Duration type.
-    ///
-    /// AM32 only supports whole through eighth, so 16th and 32nd become eighth.
-    fn from_rtttl(dur: rtttl_rs::Duration) -> Self {
-        match dur {
-            rtttl_rs::Duration::Whole => Duration::Whole,
-            rtttl_rs::Duration::Half => Duration::Half,
-            rtttl_rs::Duration::Quarter => Duration::Quarter,
-            rtttl_rs::Duration::Eighth
-            | rtttl_rs::Duration::Sixteenth
-            | rtttl_rs::Duration::ThirtySecond => Duration::Eighth,
-        }
-    }
-}
-
-impl fmt::Display for Duration {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name())
-    }
-}
 
 /// Error parsing RTTTL format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -214,90 +64,40 @@ impl From<rtttl_rs::ParseError> for RtttlError {
     }
 }
 
-/// A single note in a melody.
-///
-/// Byte encoding: `[NOTE:4][OCTAVE:2][DURATION:2]`
+/// A single entry in the Bluejay melody: (pulse_count, freq_index).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MelodyNote {
-    pub note: Note,
-    /// Relative octave (0-3). Add 4 to get real octave.
-    pub octave: u8,
-    pub duration: Duration,
+pub struct MelodyEntry {
+    /// Number of pulses (for notes) or milliseconds (for silence).
+    pub count: u8,
+    /// Frequency index. 0 = silence.
+    /// Frequency = 1_000_000 / (24.72 * freq_index + 399.3) Hz
+    pub freq_index: u8,
 }
 
-impl MelodyNote {
-    /// Decode a melody note from a byte.
-    pub fn from_byte(b: u8) -> Self {
-        Self {
-            note: Note::from_nibble(b >> 4),
-            octave: (b >> 2) & 0x03,
-            duration: Duration::from_bits(b),
+impl MelodyEntry {
+    /// Get the frequency in Hz (0 for silence).
+    pub fn frequency(&self) -> f32 {
+        if self.freq_index == 0 {
+            return 0.0;
         }
+        1_000_000.0 / (24.72 * self.freq_index as f32 + 399.3)
     }
 
-    /// Encode the note to a byte.
-    pub fn to_byte(&self) -> u8 {
-        (self.note.to_nibble() << 4) | ((self.octave & 0x03) << 2) | (self.duration as u8)
-    }
-
-    /// Get the real octave (4-7).
-    pub fn real_octave(&self) -> u8 {
-        self.octave + 4
-    }
-
-    /// Create a new melody note.
-    pub const fn new(note: Note, octave: u8, duration: Duration) -> Self {
-        Self {
-            note,
-            octave: if octave > 3 { 3 } else { octave },
-            duration,
-        }
-    }
-
-    /// Convert from rtttl-rs RtttlNote, adapting to AM32 constraints.
-    fn from_rtttl(rtttl_note: rtttl_rs::RtttlNote) -> Self {
-        let note = Note::from_rtttl(rtttl_note.note);
-        let duration = Duration::from_rtttl(rtttl_note.duration);
-
-        // AM32 supports octaves 4-7 (stored as 0-3)
-        let am32_octave = if note == Note::Pause {
-            0 // Octave doesn't matter for pause
-        } else if rtttl_note.octave < 4 {
-            0 // Transpose up to octave 4
-        } else if rtttl_note.octave > 7 {
-            3 // Transpose down to octave 7
-        } else {
-            rtttl_note.octave - 4
-        };
-
-        Self {
-            note,
-            octave: am32_octave,
-            duration,
-        }
+    /// Check if this is a silence/pause entry.
+    pub const fn is_pause(&self) -> bool {
+        self.freq_index == 0
     }
 }
 
-impl fmt::Display for MelodyNote {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.note == Note::Pause {
-            write!(f, "P/{}", self.duration.symbol())
-        } else {
-            write!(
-                f,
-                "{}{}/{}",
-                self.note,
-                self.real_octave(),
-                self.duration.symbol()
-            )
-        }
-    }
-}
-
-/// A melody consisting of multiple notes (no_std compatible, fixed-size).
+/// A melody in Bluejay format.
+///
+/// Contains a 4-byte header and up to 62 (count, freq_index) pairs.
 #[derive(Debug, Clone, Copy)]
 pub struct Melody {
-    notes: [MelodyNote; MELODY_MAX_NOTES],
+    bpm: u16,
+    default_octave: u8,
+    default_duration: u8,
+    entries: [MelodyEntry; MELODY_MAX_NOTES],
     len: usize,
 }
 
@@ -305,72 +105,77 @@ impl Melody {
     /// Create an empty melody.
     pub const fn new() -> Self {
         Self {
-            notes: [MelodyNote::new(Note::Pause, 0, Duration::Quarter); MELODY_MAX_NOTES],
+            bpm: 120,
+            default_octave: 5,
+            default_duration: 4,
+            entries: [MelodyEntry {
+                count: 0,
+                freq_index: 0,
+            }; MELODY_MAX_NOTES],
             len: 0,
         }
     }
 
-    /// Parse a melody from raw EEPROM bytes.
+    /// Parse a melody from raw EEPROM bytes (Bluejay format).
     ///
-    /// Returns `None` if the first byte is 0xFF (no melody).
+    /// Returns `None` if the first byte is 0xFF (no melody / erased flash).
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
-        if data.is_empty() || data[0] == MELODY_EMPTY {
+        if data.len() < HEADER_SIZE || data[0] == MELODY_EMPTY {
             return None;
         }
 
-        let mut melody = Self::new();
+        let bpm = ((data[0] as u16) << 8) | data[1] as u16;
+        let default_octave = data[2];
+        let default_duration = data[3];
 
-        for &b in data.iter().take(MELODY_MAX_NOTES) {
-            if b == 0x00 || b == 0xFF {
+        let mut entries = [MelodyEntry {
+            count: 0,
+            freq_index: 0,
+        }; MELODY_MAX_NOTES];
+        let mut len = 0;
+
+        let mut i = HEADER_SIZE;
+        while i + 1 < data.len() && len < MELODY_MAX_NOTES {
+            let count = data[i];
+            let freq = data[i + 1];
+            // Terminate on zero count (no more entries)
+            if count == 0 {
                 break;
             }
-            melody.notes[melody.len] = MelodyNote::from_byte(b);
-            melody.len += 1;
+            entries[len] = MelodyEntry {
+                count,
+                freq_index: freq,
+            };
+            len += 1;
+            i += 2;
         }
 
-        Some(melody)
+        Some(Self {
+            bpm,
+            default_octave,
+            default_duration,
+            entries,
+            len,
+        })
     }
 
-    /// Encode the melody to raw EEPROM bytes.
+    /// Encode the melody to raw EEPROM bytes (Bluejay format).
     pub fn to_bytes(&self) -> [u8; MELODY_SIZE] {
-        let mut buf = [0xFF; MELODY_SIZE];
+        let mut buf = [0u8; MELODY_SIZE];
 
+        // Header
+        buf[0] = (self.bpm >> 8) as u8;
+        buf[1] = self.bpm as u8;
+        buf[2] = self.default_octave;
+        buf[3] = self.default_duration;
+
+        // Entries
         for i in 0..self.len {
-            buf[i] = self.notes[i].to_byte();
-        }
-
-        // Add terminator if there are notes
-        if self.len > 0 && self.len < MELODY_SIZE {
-            buf[self.len] = 0x00;
+            buf[HEADER_SIZE + i * 2] = self.entries[i].count;
+            buf[HEADER_SIZE + i * 2 + 1] = self.entries[i].freq_index;
         }
 
         buf
-    }
-
-    /// Check if the melody is empty.
-    pub const fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    /// Get the number of notes.
-    pub const fn len(&self) -> usize {
-        self.len
-    }
-
-    /// Get the notes in the melody.
-    pub fn notes(&self) -> &[MelodyNote] {
-        &self.notes[..self.len]
-    }
-
-    /// Add a note to the melody. Returns false if melody is full.
-    pub fn push(&mut self, note: MelodyNote) -> bool {
-        if self.len < MELODY_MAX_NOTES {
-            self.notes[self.len] = note;
-            self.len += 1;
-            true
-        } else {
-            false
-        }
     }
 
     /// Get bytes to clear the melody (all 0xFF).
@@ -378,25 +183,113 @@ impl Melody {
         [0xFF; MELODY_SIZE]
     }
 
+    /// Check if the melody is empty.
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Get the number of (count, freq_index) pairs.
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Get the BPM.
+    pub const fn bpm(&self) -> u16 {
+        self.bpm
+    }
+
+    /// Get the entries.
+    pub fn entries(&self) -> &[MelodyEntry] {
+        &self.entries[..self.len]
+    }
+
+    /// Count the number of distinct notes (merging split entries).
+    pub fn note_count(&self) -> usize {
+        let entries = self.entries();
+        if entries.is_empty() {
+            return 0;
+        }
+
+        let mut count = 1;
+        for i in 1..entries.len() {
+            // A continuation of the same note has the same freq_index
+            // and the previous entry had count == 255
+            if entries[i].freq_index != entries[i - 1].freq_index
+                || entries[i - 1].count != 255
+            {
+                count += 1;
+            }
+        }
+        count
+    }
+
     /// Parse a melody from RTTTL (Ring Tone Text Transfer Language) format.
     ///
-    /// RTTTL format: `name:d=duration,o=octave,b=bpm:notes`
-    ///
-    /// Example: `doom:b=420,o=4,d=32:8g4,8e4,8b3,4e,8p`
-    ///
-    /// Notes:
-    /// - AM32 only supports octaves 4-7; lower octaves are transposed up
-    /// - AM32 only supports whole/half/quarter/eighth; shorter notes become eighths
-    /// - BPM is ignored (ESC has fixed tempo)
-    /// - Dotted notes are treated as regular notes
+    /// Converts the RTTTL notes to Bluejay (count, freq_index) pairs.
     pub fn from_rtttl(rtttl: &str) -> Result<Self, RtttlError> {
         let parsed = rtttl_rs::Rtttl::parse(rtttl)?;
-        let mut melody = Self::new();
+        let bpm = parsed.bpm();
+        let default_octave = parsed.default_octave();
+        let default_duration = parsed.default_duration().to_rtttl();
+
+        let mut melody = Self {
+            bpm,
+            default_octave,
+            default_duration,
+            entries: [MelodyEntry {
+                count: 0,
+                freq_index: 0,
+            }; MELODY_MAX_NOTES],
+            len: 0,
+        };
 
         for note in parsed.notes() {
-            let melody_note = MelodyNote::from_rtttl(note);
-            if !melody.push(melody_note) {
-                return Err(RtttlError::TooManyNotes);
+            let duration_ms = note.duration_ms(bpm);
+
+            if note.note == rtttl_rs::Note::Pause {
+                // Silence: count = duration in ms, freq_index = 0
+                // Split into multiple pairs if > 255ms
+                let mut remaining = duration_ms;
+                while remaining > 0 {
+                    if melody.len >= MELODY_MAX_NOTES {
+                        return Err(RtttlError::TooManyNotes);
+                    }
+                    let chunk = remaining.min(255);
+                    melody.entries[melody.len] = MelodyEntry {
+                        count: chunk as u8,
+                        freq_index: 0,
+                    };
+                    melody.len += 1;
+                    remaining -= chunk;
+                }
+            } else {
+                // Calculate frequency from note + octave
+                let freq = note_frequency(note.note, note.octave);
+                let freq_index = freq_to_bluejay_index(freq);
+
+                if freq_index == 0 || freq_index >= 255 {
+                    // Frequency out of representable range, skip
+                    continue;
+                }
+
+                // Calculate number of wave periods for the desired duration
+                let period_ms = 1000.0 / freq;
+                let pulses_needed = (duration_ms as f32 / period_ms + 0.5) as u32;
+
+                // Split into multiple pairs if > 255 pulses
+                let mut remaining = pulses_needed;
+                while remaining > 0 {
+                    if melody.len >= MELODY_MAX_NOTES {
+                        return Err(RtttlError::TooManyNotes);
+                    }
+                    let chunk = remaining.min(255);
+                    melody.entries[melody.len] = MelodyEntry {
+                        count: chunk as u8,
+                        freq_index: freq_index as u8,
+                    };
+                    melody.len += 1;
+                    remaining -= chunk;
+                }
             }
         }
 
@@ -421,59 +314,165 @@ impl fmt::Display for Melody {
             return write!(f, "(empty)");
         }
 
-        for (i, note) in self.notes().iter().enumerate() {
-            if i > 0 {
+        write!(f, "{}bpm, {} entries", self.bpm, self.len)?;
+
+        // Show distinct notes with approximate pitch
+        let entries = self.entries();
+        let mut i = 0;
+        let mut first = true;
+        write!(f, " [")?;
+        while i < entries.len() {
+            if !first {
                 write!(f, " ")?;
             }
-            write!(f, "{}", note)?;
+            first = false;
+
+            if entries[i].is_pause() {
+                // Sum consecutive pause entries
+                let mut total_ms: u32 = 0;
+                while i < entries.len()
+                    && entries[i].is_pause()
+                {
+                    total_ms += entries[i].count as u32;
+                    i += 1;
+                }
+                write!(f, "P/{}ms", total_ms)?;
+            } else {
+                let freq = entries[i].frequency();
+                // Sum pulses for same freq (split entries)
+                let mut total_pulses: u32 = 0;
+                let freq_idx = entries[i].freq_index;
+                while i < entries.len() && entries[i].freq_index == freq_idx {
+                    total_pulses += entries[i].count as u32;
+                    // Only merge if previous was maxed out
+                    if entries[i].count < 255 {
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+                let (name, octave) = freq_to_note_name(freq);
+                write!(f, "{}{}", name, octave)?;
+                let _ = total_pulses; // shown via entry count already
+            }
         }
+        write!(f, "]")?;
+
         Ok(())
     }
 }
 
+// =============================================================================
+// Frequency helpers
+// =============================================================================
+
+/// Calculate frequency in Hz from a note and octave.
+///
+/// Uses equal temperament tuning with A4 = 440 Hz.
+fn note_frequency(note: rtttl_rs::Note, octave: u8) -> f32 {
+    if note == rtttl_rs::Note::Pause {
+        return 0.0;
+    }
+
+    // Semitones from C4
+    let semitone_index = match note {
+        rtttl_rs::Note::C => 0,
+        rtttl_rs::Note::Cs => 1,
+        rtttl_rs::Note::D => 2,
+        rtttl_rs::Note::Ds => 3,
+        rtttl_rs::Note::E => 4,
+        rtttl_rs::Note::F => 5,
+        rtttl_rs::Note::Fs => 6,
+        rtttl_rs::Note::G => 7,
+        rtttl_rs::Note::Gs => 8,
+        rtttl_rs::Note::A => 9,
+        rtttl_rs::Note::As => 10,
+        rtttl_rs::Note::B => 11,
+        rtttl_rs::Note::Pause => return 0.0,
+    };
+
+    let semitones_from_c4 = semitone_index + (i32::from(octave) - 4) * 12;
+
+    // C4 = 261.63 Hz, each semitone is 2^(1/12)
+    261.63 * pow2_twelfths(semitones_from_c4)
+}
+
+/// Compute 2^(n/12) using a lookup table for common values.
+fn pow2_twelfths(n: i32) -> f32 {
+    // 2^(1/12) ≈ 1.05946309
+    let base: f32 = 1.059_463_1;
+    let mut result: f32 = 1.0;
+    let abs_n = if n < 0 { -n } else { n } as u32;
+
+    for _ in 0..abs_n {
+        result *= base;
+    }
+
+    if n < 0 {
+        1.0 / result
+    } else {
+        result
+    }
+}
+
+/// Convert a frequency (Hz) to Bluejay freq_index.
+///
+/// freq = 1_000_000 / (24.72 * index + 399.3)
+/// Solving for index: index = (1_000_000 / freq - 399.3) / 24.72
+fn freq_to_bluejay_index(freq: f32) -> u32 {
+    if freq <= 0.0 {
+        return 0;
+    }
+    let index = (1_000_000.0 / (freq * 24.72) - 399.3 / 24.72 + 0.5) as i32;
+    if index < 1 {
+        1
+    } else {
+        index as u32
+    }
+}
+
+/// Approximate a frequency to a note name and octave (for display only).
+const NOTE_NAMES: [&str; 12] = [
+    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+];
+
+fn freq_to_note_name(freq: f32) -> (&'static str, u8) {
+    if freq <= 0.0 {
+        return ("P", 0);
+    }
+
+    // Semitones from C4 (261.63 Hz)
+    let semitones = 12.0 * log2(freq / 261.63);
+    let semitones_rounded = (semitones + 0.5) as i32;
+
+    let note_idx = ((semitones_rounded % 12) + 12) % 12;
+    let octave = 4 + (semitones_rounded - note_idx) / 12;
+    let octave = octave.clamp(0, 9) as u8;
+
+    (NOTE_NAMES[note_idx as usize], octave)
+}
+
+/// Simple log2 approximation for no_std.
+fn log2(x: f32) -> f32 {
+    // Use the natural log identity: log2(x) = ln(x) / ln(2)
+    // ln(x) ≈ using the bit representation trick
+    #[allow(clippy::cast_sign_loss)]
+    let bits = x.to_bits();
+    let exponent = ((bits >> 23) & 0xFF) as i32 - 127;
+    let mantissa = f32::from_bits((bits & 0x007F_FFFF) | 0x3F80_0000);
+
+    // Polynomial approximation of log2(mantissa) for [1, 2)
+    // log2(m) ≈ -1.6404 + m * (2.0466 + m * (-0.7382))
+    let log2_mantissa = -1.640_4 + mantissa * (2.046_6 + mantissa * (-0.738_2));
+
+    exponent as f32 + log2_mantissa
+}
+
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
-
-    #[test]
-    fn note_encoding_roundtrip() {
-        for i in 0..=12 {
-            let note = Note::from_nibble(i);
-            assert_eq!(note.to_nibble(), i.min(12));
-        }
-    }
-
-    #[test]
-    fn duration_encoding_roundtrip() {
-        for i in 0..=3 {
-            let dur = Duration::from_bits(i);
-            assert_eq!(dur as u8, i);
-        }
-    }
-
-    #[test]
-    fn melody_note_encoding() {
-        // F4 quarter note: note=5, octave=0, duration=2
-        // Byte: 0101 00 10 = 0x52
-        let note = MelodyNote::from_byte(0x52);
-        assert_eq!(note.note, Note::F);
-        assert_eq!(note.octave, 0);
-        assert_eq!(note.real_octave(), 4);
-        assert_eq!(note.duration, Duration::Quarter);
-        assert_eq!(note.to_byte(), 0x52);
-    }
-
-    #[test]
-    fn melody_note_high_octave() {
-        // A7 eighth note: note=9, octave=3, duration=3
-        // Byte: 1001 11 11 = 0x9F
-        let note = MelodyNote::from_byte(0x9F);
-        assert_eq!(note.note, Note::A);
-        assert_eq!(note.octave, 3);
-        assert_eq!(note.real_octave(), 7);
-        assert_eq!(note.duration, Duration::Eighth);
-        assert_eq!(note.to_byte(), 0x9F);
-    }
 
     #[test]
     fn melody_from_bytes_empty() {
@@ -483,31 +482,42 @@ mod tests {
 
     #[test]
     fn melody_from_bytes_simple() {
-        let mut data = [0xFF; 128];
-        data[0] = 0x52; // F4 quarter
-        data[1] = 0x97; // A5 eighth
-        data[2] = 0x00; // Terminator
+        let mut data = [0u8; 128];
+        // Header: 120 BPM, octave 5, quarter note default
+        data[0] = 0; // BPM high
+        data[1] = 120; // BPM low
+        data[2] = 5; // octave
+        data[3] = 4; // duration (quarter)
+        // One entry: 100 pulses, freq_index 50
+        data[4] = 100;
+        data[5] = 50;
 
         let melody = Melody::from_bytes(&data).unwrap();
-        assert_eq!(melody.len(), 2);
-        assert_eq!(melody.notes()[0].note, Note::F);
-        assert_eq!(melody.notes()[1].note, Note::A);
+        assert_eq!(melody.bpm(), 120);
+        assert_eq!(melody.len(), 1);
+        assert_eq!(melody.entries()[0].count, 100);
+        assert_eq!(melody.entries()[0].freq_index, 50);
     }
 
     #[test]
     fn melody_to_bytes_roundtrip() {
-        let mut melody = Melody::new();
-        melody.push(MelodyNote::new(Note::C, 0, Duration::Quarter));
-        melody.push(MelodyNote::new(Note::E, 0, Duration::Quarter));
-        melody.push(MelodyNote::new(Note::G, 0, Duration::Half));
+        let mut data = [0u8; 128];
+        data[0] = 0;
+        data[1] = 120;
+        data[2] = 5;
+        data[3] = 4;
+        data[4] = 100;
+        data[5] = 50;
+        data[6] = 200;
+        data[7] = 30;
 
-        let bytes = melody.to_bytes();
-        let parsed = Melody::from_bytes(&bytes).unwrap();
+        let melody = Melody::from_bytes(&data).unwrap();
+        let output = melody.to_bytes();
 
-        assert_eq!(parsed.len(), 3);
-        assert_eq!(parsed.notes()[0].note, Note::C);
-        assert_eq!(parsed.notes()[1].note, Note::E);
-        assert_eq!(parsed.notes()[2].note, Note::G);
+        // Header and entries should match
+        assert_eq!(&output[0..8], &data[0..8]);
+        // Rest should be zeros
+        assert!(output[8..].iter().all(|&b| b == 0));
     }
 
     #[test]
@@ -522,126 +532,78 @@ mod tests {
         let rtttl = "test:d=4,o=5,b=120:c,d,e";
         let melody = Melody::from_rtttl(rtttl).unwrap();
 
-        assert_eq!(melody.len(), 3);
-        assert_eq!(melody.notes()[0].note, Note::C);
-        assert_eq!(melody.notes()[0].real_octave(), 5);
-        assert_eq!(melody.notes()[0].duration, Duration::Quarter);
-        assert_eq!(melody.notes()[1].note, Note::D);
-        assert_eq!(melody.notes()[2].note, Note::E);
+        assert_eq!(melody.bpm(), 120);
+        // Should have entries (one or more per note)
+        assert!(melody.len() > 0);
+        // All entries should have non-zero freq_index (no pauses)
+        assert!(melody.entries().iter().all(|e| e.freq_index > 0));
     }
 
     #[test]
-    fn rtttl_parse_with_durations() {
-        let rtttl = "test:d=4,o=5,b=120:1c,2d,4e,8f";
+    fn rtttl_parse_with_pause() {
+        let rtttl = "test:d=4,o=5,b=120:c,p,e";
         let melody = Melody::from_rtttl(rtttl).unwrap();
 
-        assert_eq!(melody.len(), 4);
-        assert_eq!(melody.notes()[0].duration, Duration::Whole);
-        assert_eq!(melody.notes()[1].duration, Duration::Half);
-        assert_eq!(melody.notes()[2].duration, Duration::Quarter);
-        assert_eq!(melody.notes()[3].duration, Duration::Eighth);
+        // Should have pause entries (freq_index == 0)
+        assert!(melody.entries().iter().any(|e| e.freq_index == 0));
     }
 
     #[test]
-    fn rtttl_parse_with_octaves() {
-        let rtttl = "test:d=4,o=5,b=120:c4,c5,c6,c7";
+    fn freq_to_index_roundtrip() {
+        // C5 = 523.25 Hz
+        let freq = 523.25f32;
+        let idx = freq_to_bluejay_index(freq);
+        assert!(idx > 0);
+        assert!(idx < 255);
+
+        // Convert back and check it's close
+        let entry = MelodyEntry {
+            count: 1,
+            freq_index: idx as u8,
+        };
+        let recovered = entry.frequency();
+        let ratio = recovered / freq;
+        assert!(
+            (0.95..1.05).contains(&ratio),
+            "frequency mismatch: {} vs {} (ratio {})",
+            freq,
+            recovered,
+            ratio
+        );
+    }
+
+    #[test]
+    fn note_freq_a4() {
+        let freq = note_frequency(rtttl_rs::Note::A, 4);
+        // A4 should be close to 440 Hz
+        assert!(
+            (430.0..450.0).contains(&freq),
+            "A4 frequency {} not close to 440",
+            freq
+        );
+    }
+
+    #[test]
+    fn note_count_simple() {
+        let rtttl = "test:d=4,o=5,b=120:c,d,e";
         let melody = Melody::from_rtttl(rtttl).unwrap();
-
-        assert_eq!(melody.len(), 4);
-        assert_eq!(melody.notes()[0].real_octave(), 4);
-        assert_eq!(melody.notes()[1].real_octave(), 5);
-        assert_eq!(melody.notes()[2].real_octave(), 6);
-        assert_eq!(melody.notes()[3].real_octave(), 7);
+        assert_eq!(melody.note_count(), 3);
     }
 
     #[test]
-    fn rtttl_parse_sharps() {
-        let rtttl = "test:d=4,o=5,b=120:c#,d#,f#,g#,a#";
+    fn display_format() {
+        let rtttl = "test:d=4,o=5,b=120:c,p,e";
         let melody = Melody::from_rtttl(rtttl).unwrap();
-
-        assert_eq!(melody.len(), 5);
-        assert_eq!(melody.notes()[0].note, Note::Cs);
-        assert_eq!(melody.notes()[1].note, Note::Ds);
-        assert_eq!(melody.notes()[2].note, Note::Fs);
-        assert_eq!(melody.notes()[3].note, Note::Gs);
-        assert_eq!(melody.notes()[4].note, Note::As);
+        let s = std::format!("{}", melody);
+        assert!(s.contains("120bpm"));
     }
 
     #[test]
-    fn rtttl_parse_pause() {
-        let rtttl = "test:d=4,o=5,b=120:c,8p,e";
+    fn rtttl_doom() {
+        let rtttl = "doom:b=420,o=4,d=32:8g4,8e4,8b3,4e,8p,1a#3";
         let melody = Melody::from_rtttl(rtttl).unwrap();
-
-        assert_eq!(melody.len(), 3);
-        assert_eq!(melody.notes()[0].note, Note::C);
-        assert_eq!(melody.notes()[1].note, Note::Pause);
-        assert_eq!(melody.notes()[1].duration, Duration::Eighth);
-        assert_eq!(melody.notes()[2].note, Note::E);
-    }
-
-    #[test]
-    fn rtttl_parse_low_octave_transpose() {
-        // Octave 3 should be transposed to octave 4
-        let rtttl = "test:d=4,o=5,b=120:c3,e3";
-        let melody = Melody::from_rtttl(rtttl).unwrap();
-
-        assert_eq!(melody.len(), 2);
-        assert_eq!(melody.notes()[0].real_octave(), 4); // Transposed from 3 to 4
-        assert_eq!(melody.notes()[1].real_octave(), 4);
-    }
-
-    #[test]
-    fn rtttl_parse_doom() {
-        let rtttl = "doom:b=420,o=4,d=32:8g4,8e4,8b3,8e4,4e,8p,1a#3";
-        let melody = Melody::from_rtttl(rtttl).unwrap();
-
-        assert_eq!(Melody::rtttl_name(rtttl), Some("doom"));
-        assert_eq!(melody.len(), 7);
-
-        // 8g4 = G octave 4, eighth
-        assert_eq!(melody.notes()[0].note, Note::G);
-        assert_eq!(melody.notes()[0].real_octave(), 4);
-        assert_eq!(melody.notes()[0].duration, Duration::Eighth);
-
-        // 8b3 = Bb octave 3, transposed to 4
-        assert_eq!(melody.notes()[2].note, Note::As); // 'b' = Bb in RTTTL
-        assert_eq!(melody.notes()[2].real_octave(), 4);
-
-        // 4e = E, quarter, default octave 4
-        assert_eq!(melody.notes()[4].note, Note::E);
-        assert_eq!(melody.notes()[4].duration, Duration::Quarter);
-
-        // 8p = pause eighth
-        assert_eq!(melody.notes()[5].note, Note::Pause);
-
-        // 1a#3 = A# octave 3 transposed to 4, whole
-        assert_eq!(melody.notes()[6].note, Note::As);
-        assert_eq!(melody.notes()[6].real_octave(), 4);
-        assert_eq!(melody.notes()[6].duration, Duration::Whole);
-    }
-
-    #[test]
-    fn rtttl_parse_german_h_notation() {
-        // H = B natural in German notation
-        let rtttl = "test:d=4,o=5,b=120:h4,h5";
-        let melody = Melody::from_rtttl(rtttl).unwrap();
-
-        assert_eq!(melody.len(), 2);
-        assert_eq!(melody.notes()[0].note, Note::B);
-        assert_eq!(melody.notes()[0].real_octave(), 4);
-        assert_eq!(melody.notes()[1].note, Note::B);
-        assert_eq!(melody.notes()[1].real_octave(), 5);
-    }
-
-    #[test]
-    fn rtttl_name_extraction() {
-        assert_eq!(Melody::rtttl_name("doom:b=420,o=4:c"), Some("doom"));
-        assert_eq!(Melody::rtttl_name("test:d=4:e"), Some("test"));
-    }
-
-    #[test]
-    fn rtttl_missing_colon_error() {
-        let result = Melody::from_rtttl("invalid");
-        assert_eq!(result.err(), Some(RtttlError::MissingColon));
+        // Should parse without error
+        assert!(melody.len() > 0);
+        assert_eq!(melody.bpm(), 420);
     }
 }

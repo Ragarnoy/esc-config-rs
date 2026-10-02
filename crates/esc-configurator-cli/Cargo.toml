@@ -7,7 +7,6 @@ description = "CLI tool for configuring BLHeli/AM32 ESCs"
 
 [dependencies]
 esc-protocol = { path = "../esc-protocol", features = ["std", "serde"] }
-esc-dshot = { path = "../esc-dshot", features = ["std"] }
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true

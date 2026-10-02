@@ -26,9 +26,6 @@ pub const TIMESTAMP_BLOCK_SIZE: usize = 16;
 /// Size of the device ID block in bytes.
 pub const DEVICE_ID_BLOCK_SIZE: usize = 16;
 
-/// Main configuration block address.
-pub const CONFIG_ADDRESS: u16 = 0x7C00;
-
 /// Timestamp block address.
 pub const TIMESTAMP_ADDRESS: u16 = 0xEB00;
 
@@ -73,7 +70,7 @@ impl ConfigBlock {
 
     /// Get mutable reference to raw bytes.
     #[inline]
-    pub fn as_bytes_mut(&mut self) -> &mut [u8; CONFIG_BLOCK_SIZE] {
+    pub const fn as_bytes_mut(&mut self) -> &mut [u8; CONFIG_BLOCK_SIZE] {
         &mut self.data
     }
 

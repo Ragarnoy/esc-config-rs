@@ -85,7 +85,29 @@ enum Commands {
         device: String,
     },
 
-    /// Backup ESC configuration to file
+    /// Export ESC configuration as human-readable TOML (AM32 only)
+    Export {
+        /// Serial port device
+        #[arg(short, long)]
+        device: String,
+
+        /// Output TOML file path
+        #[arg(short, long)]
+        output: String,
+    },
+
+    /// Import ESC configuration from TOML file (AM32 only)
+    Import {
+        /// Serial port device
+        #[arg(short, long)]
+        device: String,
+
+        /// Input TOML file path
+        #[arg(short, long)]
+        input: String,
+    },
+
+    /// Backup ESC configuration to file (raw 256-byte binary)
     Backup {
         /// Serial port device
         #[arg(short, long)]
@@ -96,7 +118,7 @@ enum Commands {
         output: String,
     },
 
-    /// Restore ESC configuration from backup file
+    /// Restore ESC configuration from binary backup file
     Restore {
         /// Serial port device
         #[arg(short, long)]
@@ -105,6 +127,13 @@ enum Commands {
         /// Input backup file path
         #[arg(short, long)]
         input: String,
+    },
+
+    /// Reset ESC configuration to sensible defaults
+    ResetDefaults {
+        /// Serial port device
+        #[arg(short, long)]
+        device: String,
     },
 
     /// List available serial ports
@@ -218,6 +247,23 @@ async fn main() -> anyhow::Result<()> {
                 return Ok(());
             }
             commands::restore_config(&device, &input)?;
+        }
+        Commands::Export { device, output } => {
+            commands::export_config(&device, &output)?;
+        }
+        Commands::Import { device, input } => {
+            if !ui::confirm_operation("This will overwrite ESC configuration from TOML. Continue?")? {
+                println!("Aborted.");
+                return Ok(());
+            }
+            commands::import_config(&device, &input)?;
+        }
+        Commands::ResetDefaults { device } => {
+            if !ui::confirm_operation("This will reset ESC configuration to defaults. Continue?")? {
+                println!("Aborted.");
+                return Ok(());
+            }
+            commands::reset_defaults(&device)?;
         }
         Commands::Ports => {
             commands::list_ports()?;

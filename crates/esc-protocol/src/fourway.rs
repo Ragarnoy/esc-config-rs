@@ -460,10 +460,10 @@ pub fn parse_init_flash_response(data: &[u8]) -> Result<DeviceInitInfo, FourWayE
 
     // Device type is typically in the param field or first data byte
     // The exact location can vary; we check both
-    let mcu_byte = if !response.data.is_empty() {
-        response.data[0]
-    } else {
+    let mcu_byte = if response.data.is_empty() {
         response.param
+    } else {
+        response.data[0]
     };
 
     let mcu_type = FourWayMcuType::from_byte(mcu_byte);

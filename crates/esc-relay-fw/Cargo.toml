@@ -5,28 +5,20 @@ edition.workspace = true
 license.workspace = true
 description = "ESC configurator relay firmware for RP2350"
 
+[features]
+default = []
+
 [[bin]]
 name = "esc-relay-fw"
 path = "src/main.rs"
 
-[[bin]]
-name = "motor_test"
-path = "src/bin/motor_test.rs"
-
-[[bin]]
-name = "beep_test"
-path = "src/bin/beep_test.rs"
-
 [dependencies]
-esc-relay-core = { path = "../esc-relay-core", features = ["defmt"] }
-esc-dshot = { path = "../esc-dshot" }
-
 # Embassy
-embassy-executor = { version = "0.9.1", features = ["arch-cortex-m", "executor-thread", "defmt"] }
-embassy-rp = { version = "0.9.0", features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp235xa"] }
-embassy-time = { version = "0.5.0", features = ["defmt", "defmt-timestamp-uptime"] }
-embassy-usb = { version = "0.5.1", features = ["defmt"] }
-embassy-sync = { version = "0.7.2", features = ["defmt"] }
+embassy-executor = { workspace = true, features = ["arch-cortex-m", "executor-thread", "defmt"] }
+embassy-rp = { workspace = true, features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp235xa"] }
+embassy-time = { workspace = true, features = ["defmt", "defmt-timestamp-uptime"] }
+embassy-usb = { workspace = true, features = ["defmt"] }
+embassy-sync = { workspace = true, features = ["defmt"] }
 embassy-futures = "0.1"
 
 # Cortex-M
@@ -36,9 +28,6 @@ cortex-m-rt = "0.7"
 defmt = { version = "1.0.1" }
 defmt-rtt = { version = "1.1.0" }
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
-
-# USB
-usbd-serial = "0.2"
 
 # Misc
 static_cell = "2"

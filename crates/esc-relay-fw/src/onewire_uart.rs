@@ -69,18 +69,17 @@ impl<'d, PIO: Instance, const SM_TX: usize, const SM_RX: usize>
         // With 14 cycles per bit, we need to wait 1.5 bit times (21 cycles)
         // to sample in the middle of the first data bit
         //
-        // Using `gpio 0` instead of `pin 0` to read directly from GPIO0,
-        // bypassing the IN_BASE pin mapping.
+        // Using `pin 0` to read via IN_BASE pin mapping (matches the configured pin).
         let rx_prg = pio_asm!(
-            // Wait for start bit (falling edge) on GPIO0
-            "wait 0 gpio 0",
+            // Wait for start bit (falling edge) on the configured input pin
+            "wait 0 pin 0",
             "set x, 7        [20]", // Wait 1.5 bit times (21 cycles) to center on first data bit
             "bitloop:",
             "in pins, 1      [6]",  // Sample bit (7 cycles)
             "jmp x--, bitloop [6]", // Loop for 8 bits (7 cycles) = 14 cycles per bit
             "push block",           // Push received byte
             // Wait for stop bit / line to go high before next byte
-            "wait 1 gpio 0",
+            "wait 1 pin 0",
         );
 
         // Calculate clock divider for baud rate
@@ -212,6 +211,10 @@ impl<'d, PIO: Instance, const SM_TX: usize, const SM_RX: usize>
 
     /// Read bytes with timeout.
     ///
+    /// Uses `timeout_ms` to wait for the first byte, then a short inter-byte
+    /// timeout (3ms) for subsequent bytes. At 19200 baud one byte takes ~521µs,
+    /// so a 3ms gap reliably indicates end of response.
+    ///
     /// Returns the number of bytes read.
     pub async fn read_with_timeout(
         &mut self,
@@ -221,16 +224,28 @@ impl<'d, PIO: Instance, const SM_TX: usize, const SM_RX: usize>
         use embassy_futures::select::{select, Either};
         use embassy_time::{Duration, Timer};
 
+        /// Inter-byte timeout: 3ms is ~6x the byte time at 19200 baud.
+        const INTER_BYTE_TIMEOUT_MS: u64 = 3;
+
         let mut count = 0;
-        let deadline = embassy_time::Instant::now() + Duration::from_millis(timeout_ms);
+        let initial_deadline =
+            embassy_time::Instant::now() + Duration::from_millis(timeout_ms);
 
         while count < buf.len() {
-            let remaining = deadline.saturating_duration_since(embassy_time::Instant::now());
-            if remaining.as_ticks() == 0 {
-                break;
-            }
+            let timeout = if count == 0 {
+                // First byte: use the full initial timeout
+                let remaining =
+                    initial_deadline.saturating_duration_since(embassy_time::Instant::now());
+                if remaining.as_ticks() == 0 {
+                    break;
+                }
+                remaining
+            } else {
+                // Subsequent bytes: short inter-byte timeout
+                Duration::from_millis(INTER_BYTE_TIMEOUT_MS)
+            };
 
-            match select(self.sm_rx.rx().wait_pull(), Timer::after(remaining)).await {
+            match select(self.sm_rx.rx().wait_pull(), Timer::after(timeout)).await {
                 Either::First(byte) => {
                     buf[count] = (byte >> 24) as u8;
                     count += 1;

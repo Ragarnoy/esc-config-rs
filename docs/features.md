@@ -6,7 +6,7 @@ Other features from the reference implementation.
 
 ## Melody/Music Support {#melody}
 
-AM32 ESCs support custom startup melodies stored in EEPROM.
+AM32 ESCs support custom startup melodies stored in EEPROM using the Bluejay format.
 
 ### Memory Location
 
@@ -19,169 +19,65 @@ Size: 128 bytes
 
 If the first byte is `0xFF`, no melody is configured.
 
-### Note Format
-
-Each note is encoded in a single byte:
+### Bluejay Binary Format
 
 ```
-Bit layout: [NOTE:4][OCTAVE:2][DURATION:2]
-
-┌─────────┬─────────┬─────────┐
-│ NOTE    │ OCTAVE  │DURATION │
-│ [7:4]   │ [3:2]   │ [1:0]   │
-└─────────┴─────────┴─────────┘
+Offset  Size  Content
+──────────────────────────────────
+0       2     BPM (big-endian u16)
+2       1     Default octave
+3       1     Default duration (RTTTL: 1/2/4/8/16/32)
+4+      2 ea  (pulse_count, freq_index) pairs
+──────────────────────────────────
+Max: 62 pairs (124 bytes of data after 4-byte header)
 ```
 
-### Note Values (4 bits)
+- `freq_index = 0`: silence, `pulse_count` = duration in milliseconds
+- `freq_index != 0`: note, `pulse_count` = number of wave periods
+- Frequency formula: `1_000_000 / (24.72 * freq_index + 399.3)` Hz
+- Notes spanning > 255 pulses are split across multiple pairs
+- Terminated by `pulse_count = 0`
 
-| Value | Note |
-|-------|------|
-| 0 | C |
-| 1 | C# |
-| 2 | D |
-| 3 | D# |
-| 4 | E |
-| 5 | F |
-| 6 | F# |
-| 7 | G |
-| 8 | G# |
-| 9 | A |
-| 10 | A# |
-| 11 | B |
-| 12 | Pause |
+### RTTTL Input Support
 
-### Octave (2 bits)
+Melodies can be provided in RTTTL (Ring Tone Text Transfer Language) format,
+which is converted to Bluejay binary automatically:
 
-Relative to base octave 4:
-- 0 = Octave 4
-- 1 = Octave 5
-- 2 = Octave 6
-- 3 = Octave 7
-
-### Duration (2 bits)
-
-| Value | Duration |
-|-------|----------|
-| 0 | Whole note |
-| 1 | Half note |
-| 2 | Quarter note |
-| 3 | Eighth note |
-
-### Example
-
-Byte `0x52` = `0101 00 10`:
-- Note = 5 (F)
-- Octave = 0 (octave 4)
-- Duration = 2 (quarter note)
-
-### Rust Implementation
-
-```rust
-// crates/esc-protocol/src/melody.rs
-
-pub const MELODY_OFFSET: usize = 48;
-pub const MELODY_SIZE: usize = 128;
-pub const MELODY_EMPTY: u8 = 0xFF;
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Note {
-    C, Cs, D, Ds, E, F, Fs, G, Gs, A, As, B, Pause,
-}
-
-impl Note {
-    pub fn from_nibble(n: u8) -> Self {
-        match n & 0x0F {
-            0 => Note::C, 1 => Note::Cs, 2 => Note::D, 3 => Note::Ds,
-            4 => Note::E, 5 => Note::F, 6 => Note::Fs, 7 => Note::G,
-            8 => Note::Gs, 9 => Note::A, 10 => Note::As, 11 => Note::B,
-            _ => Note::Pause,
-        }
-    }
-
-    pub fn to_nibble(self) -> u8 {
-        match self {
-            Note::C => 0, Note::Cs => 1, Note::D => 2, Note::Ds => 3,
-            Note::E => 4, Note::F => 5, Note::Fs => 6, Note::G => 7,
-            Note::Gs => 8, Note::A => 9, Note::As => 10, Note::B => 11,
-            Note::Pause => 12,
-        }
-    }
-
-    pub fn name(&self) -> &'static str {
-        match self {
-            Note::C => "C", Note::Cs => "C#", Note::D => "D", Note::Ds => "D#",
-            Note::E => "E", Note::F => "F", Note::Fs => "F#", Note::G => "G",
-            Note::Gs => "G#", Note::A => "A", Note::As => "A#", Note::B => "B",
-            Note::Pause => "P",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct MelodyNote {
-    pub note: Note,
-    pub octave: u8,      // 0-3 (add 4 for real octave)
-    pub duration: u8,    // 0=whole, 1=half, 2=quarter, 3=eighth
-}
-
-impl MelodyNote {
-    pub fn from_byte(b: u8) -> Self {
-        Self {
-            note: Note::from_nibble(b >> 4),
-            octave: (b >> 2) & 0x03,
-            duration: b & 0x03,
-        }
-    }
-
-    pub fn to_byte(&self) -> u8 {
-        (self.note.to_nibble() << 4) | (self.octave << 2) | self.duration
-    }
-
-    pub fn real_octave(&self) -> u8 {
-        self.octave + 4
-    }
-}
-
-pub struct Melody {
-    pub notes: Vec<MelodyNote>,
-}
-
-impl Melody {
-    pub fn from_bytes(data: &[u8]) -> Option<Self> {
-        if data.is_empty() || data[0] == MELODY_EMPTY {
-            return None;
-        }
-        let notes = data.iter()
-            .take_while(|&&b| b != 0x00 && b != 0xFF)
-            .map(|&b| MelodyNote::from_byte(b))
-            .collect();
-        Some(Self { notes })
-    }
-
-    pub fn to_bytes(&self) -> [u8; MELODY_SIZE] {
-        let mut buf = [0xFF; MELODY_SIZE];
-        for (i, note) in self.notes.iter().take(MELODY_SIZE - 1).enumerate() {
-            buf[i] = note.to_byte();
-        }
-        if !self.notes.is_empty() && self.notes.len() < MELODY_SIZE {
-            buf[self.notes.len()] = 0x00;  // Terminator
-        }
-        buf
-    }
-}
 ```
+name:d=4,o=5,b=120:c,d,e,f,g
+```
+
+### EEPROM Write Strategy
+
+AM32 flash writes erase the entire page. Writing melody alone at offset 48
+would destroy config data. The CLI uses **read-modify-write**:
+
+1. Read full 256-byte config block from EEPROM base
+2. Overlay melody data at bytes 48-175
+3. Write 176 bytes (config + melody) at EEPROM base address
+
+This matches how am32.ca writes settings as a single block.
 
 ### CLI Commands
 
 ```bash
-# Download melody from ESC
-esc-configurator melody download --device /dev/ttyACM0 --output melody.bin
+# Upload melody (RTTTL or binary)
+esc-configurator melody upload -d /dev/ttyACM0 -i melody.rtttl
 
-# Upload melody to ESC
-esc-configurator melody upload --device /dev/ttyACM0 --input melody.bin
+# Download melody from ESC
+esc-configurator melody download -d /dev/ttyACM0 -o melody.bin
+
+# Show current melody
+esc-configurator melody show -d /dev/ttyACM0
 
 # Clear melody
-esc-configurator melody clear --device /dev/ttyACM0
+esc-configurator melody clear -d /dev/ttyACM0
+
+# Show melody file info
+esc-configurator melody info -f melody.rtttl
+
+# Convert RTTTL to binary
+esc-configurator melody convert -i melody.rtttl -o melody.bin
 ```
 
 ---
@@ -414,62 +310,17 @@ esc-configurator restore --device /dev/ttyACM0 --input my_config.bin
 
 ---
 
-## C++ Reference
+## Reference: am32.ca Configurator
 
-From `widget.cpp`:
+The am32.ca web configurator (am32-firmware/am32-configurator on GitHub)
+writes all settings as a single block:
 
-```cpp
-// Music read
-bool Widget::getMusic() {
-    writeData(RL->setAddress(four_way->eeprom_address + 48));
-    // ... wait for ACK ...
-    writeData(RL->readFlash(128));
-    // ... parse response ...
+- **Layout size:** 184 bytes (0xB8) = config + melody + CAN settings
+- **Melody offset:** 0x30 (48 bytes into the layout)
+- **Melody size:** 128 bytes
+- **Write approach:** Single write of full layout at EEPROM base address
+- **No erase before write:** The bootloader's commit handles page erase internally
 
-    if ((uint8_t)music.at(0) == 0xFF) {
-        musicBufferFull = false;  // No melody
-    } else {
-        musicBufferFull = true;
-        music_buffer->clear();
-        for (int i = 0; i < 128; i++) {
-            music_buffer->append(music[i]);
-        }
-    }
-}
-
-// Music write
-bool Widget::writeMusic() {
-    if (musicBufferFull) {
-        QByteArray musicBufferOut;
-        for (int i = 0; i < 128; i++) {
-            musicBufferOut.append(music_buffer->at(i));
-        }
-        sendDirect(musicBufferOut, 128, four_way->eeprom_address + 48);
-    }
-}
-
-// Presets
-void Widget::sendFirstEeprom(uint8_t eeprom_type) {
-    QByteArray eeprom_out;
-    if (eeprom_type == 0) {
-        for (int i = 0; i < 48; i++) {
-            eeprom_out.append((char)air_starteeprom[i]);
-        }
-    }
-    if (eeprom_type == 1) {
-        for (int i = 0; i < 48; i++) {
-            eeprom_out.append((char)crawler_starteeprom[i]);
-        }
-    }
-    sendDirect(eeprom_out, 48, four_way->eeprom_address);
-}
-
-// Offline editing
-void Widget::on_OfflineCheckBox_stateChanged(int arg1) {
-    if (ui->OfflineCheckBox->isChecked()) {
-        // Enable UI without connection
-        firstOffline = true;
-        on_loadConfigButton_clicked();  // Load defaults or file
-    }
-}
-```
+The C++ desktop configurator (ESC Config Tool) writes melody separately
+at `eeprom_address + 48`, which can cause data loss due to page erase.
+Our implementation follows the am32.ca approach.
