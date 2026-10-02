@@ -1,32 +1,32 @@
-//! Device type classification.
+//! Device classification from the connect reply.
 //!
-//! Classifies ESC devices by bootloader type and firmware.
+//! The reply is `"471" PIN FLASH ...`, and the historical "device id" is
+//! `PIN | FLASH << 8`. AM32 bootloaders put the signal pin code (`port << 4 | pin`)
+//! in the low byte and a flash size code in the high byte, so an AM32 ESC is
+//! recognised by its flash code, whatever pin it uses.
 //!
-//! **Supported:**
-//! - AM32 (ARM MCUs - AT32, STM32, etc.)
+//! **Supported:** AM32.
 //!
-//! **NOT Supported:**
-//! - BLHeli_S (SiLabs EFM8): recognised so the error can name it, never exercised
-//!   on hardware
-//! - BLHeli_32 (will panic)
-//! - ATmega-based ESCs (legacy)
+//! **Not supported:** BLHeli_S (SiLabs EFM8) and ATmega bootloaders are recognised
+//! so the error can name them; BLHeli_32 and anything else is "unknown".
 
 /// Known SIL (Silabs) bootloader device IDs - these are BLHeli_S (unsupported).
 pub const SIL_DEVICE_IDS: &[u16] = &[0xF310, 0xF330, 0xF410, 0xF390, 0xF850, 0xE8B1, 0xE8B2];
 
-/// Known ARM bootloader device IDs - these could be AM32 or BLHeli_32.
-/// We assume AM32; BLHeli_32 detection requires firmware inspection.
-pub const ARM_DEVICE_IDS: &[u16] = &[0x1F02, 0x1F06, 0x3306, 0x3406, 0x3506, 0x2B06, 0x4706];
-
 /// Known ATM (AtMega) bootloader device IDs - legacy, not supported.
 pub const ATM_DEVICE_IDS: &[u16] = &[0x9307, 0x930A, 0x930F, 0x940B];
+
+/// AM32 flash size codes: 32K, 64K, 128K, and NXP 64K / 128K.
+///
+/// The NXP codes have no fixed layout; they need the bootloader's devinfo.
+pub const AM32_FLASH_CODES: &[u8] = &[0x1F, 0x35, 0x2B, 0x15, 0x16];
 
 /// Bootloader type based on MCU architecture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootloaderType {
     /// Silabs EFM8 bootloader (BLHeli_S, unsupported).
     Sil,
-    /// ARM Cortex-M bootloader (AM32 or BLHeli_32).
+    /// ARM Cortex-M bootloader with an AM32 flash code.
     Arm,
     /// AtMega bootloader (legacy, unsupported).
     Atm,
@@ -44,7 +44,7 @@ pub enum FirmwareType {
 /// Device classification result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeviceInfo {
-    /// Raw device ID from connect response.
+    /// Raw device ID from connect response (`PIN | FLASH << 8`).
     pub device_id: u16,
     /// Bootloader type.
     pub bootloader: BootloaderType,
@@ -59,118 +59,33 @@ impl DeviceInfo {
         self.firmware.is_some()
     }
 
-    /// Get the EEPROM/config base address for this device.
-    ///
-    /// The high byte of the device_id corresponds to the MCU type:
-    /// - 0x1F (STM32F051): 0x7C00
-    /// - 0x2B (STM32G071): 0x7E00
-    /// - 0x35 (AT32F421/STM32F3xx): 0xF800
-    /// - Others: 0x7C00 (default)
-    pub const fn eeprom_offset(&self) -> u16 {
-        let mcu_type = (self.device_id >> 8) as u8;
-        match mcu_type {
-            0x2B => 0x7E00, // STM32G071
-            0x35 => 0xF800, // AT32F421 / STM32F3xx
-            _ => 0x7C00,    // STM32F051 and others
-        }
+    /// Signal pin code (`port << 4 | pin` on AM32: `0x06` is PA6, `0x14` PB4).
+    pub const fn pin_code(&self) -> u8 {
+        self.device_id as u8
+    }
+
+    /// Flash size code (`0x1F` 32K, `0x35` 64K, `0x2B` 128K on AM32).
+    pub const fn flash_code(&self) -> u8 {
+        (self.device_id >> 8) as u8
     }
 }
 
 /// Classify a device by its ID from the connect response.
-///
-/// # Panics
-///
-/// This function does NOT panic. Use [`ensure_supported`] to panic on
-/// unsupported devices.
 pub fn classify_device(device_id: u16) -> DeviceInfo {
-    // Check SIL devices first (BLHeli_S, unsupported)
-    if SIL_DEVICE_IDS.contains(&device_id) {
-        return DeviceInfo {
-            device_id,
-            bootloader: BootloaderType::Sil,
-            firmware: None,
-        };
-    }
-
-    // Check ARM devices (assume AM32, NOT BLHeli_32)
-    if ARM_DEVICE_IDS.contains(&device_id) {
-        return DeviceInfo {
-            device_id,
-            bootloader: BootloaderType::Arm,
-            firmware: Some(FirmwareType::Am32),
-        };
-    }
-
-    // Check ATM devices (legacy, unsupported)
-    if ATM_DEVICE_IDS.contains(&device_id) {
-        return DeviceInfo {
-            device_id,
-            bootloader: BootloaderType::Atm,
-            firmware: None,
-        };
-    }
-
-    // Unknown device
+    let (bootloader, firmware) = if SIL_DEVICE_IDS.contains(&device_id) {
+        (BootloaderType::Sil, None)
+    } else if ATM_DEVICE_IDS.contains(&device_id) {
+        (BootloaderType::Atm, None)
+    } else if AM32_FLASH_CODES.contains(&((device_id >> 8) as u8)) {
+        (BootloaderType::Arm, Some(FirmwareType::Am32))
+    } else {
+        (BootloaderType::Unknown, None)
+    };
     DeviceInfo {
         device_id,
-        bootloader: BootloaderType::Unknown,
-        firmware: None,
+        bootloader,
+        firmware,
     }
-}
-
-/// Classify device and panic if unsupported.
-///
-/// # Panics
-///
-/// Panics if the device is not a supported AM32 ESC.
-pub fn ensure_supported(device_id: u16) -> DeviceInfo {
-    let info = classify_device(device_id);
-
-    match info.bootloader {
-        BootloaderType::Arm => info,
-        BootloaderType::Sil => {
-            panic!(
-                "Unsupported device: BLHeli_S (SiLabs) ESC (device_id=0x{:04X}). \
-                 Only AM32 is supported.",
-                device_id
-            );
-        }
-        BootloaderType::Atm => {
-            panic!(
-                "Unsupported device: ATmega-based ESC (device_id=0x{:04X}). \
-                 Only AM32 is supported.",
-                device_id
-            );
-        }
-        BootloaderType::Unknown => {
-            panic!(
-                "Unknown device (device_id=0x{:04X}). \
-                 This might be BLHeli_32 which is NOT supported. \
-                 Only AM32 is supported.",
-                device_id
-            );
-        }
-    }
-}
-
-/// Check if device ID looks like BLHeli_32.
-///
-/// BLHeli_32 uses ARM bootloader but has different device IDs than AM32.
-/// This is a heuristic - for definitive detection, check firmware signature.
-///
-/// Note: Currently returns false for all known AM32 IDs. Unknown ARM devices
-/// should be treated with caution.
-pub const fn might_be_blheli32(device_id: u16) -> bool {
-    // Known AM32 device IDs are in ARM_DEVICE_IDS
-    // If it's ARM but not in our list, it might be BLHeli_32
-    // This is conservative - we'd rather reject than brick
-    let is_known_arm = matches!(
-        device_id,
-        0x1F02 | 0x1F06 | 0x3306 | 0x3406 | 0x3506 | 0x2B06 | 0x4706
-    );
-
-    // If bootloader looks ARM-ish but not in our known list, suspect BLHeli_32
-    !is_known_arm && (device_id & 0x00FF) == 0x06
 }
 
 #[cfg(test)]
@@ -178,120 +93,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn classify_sil_device() {
-        let info = classify_device(0xF390);
-        assert_eq!(info.bootloader, BootloaderType::Sil);
-        assert_eq!(info.firmware, None);
-        assert!(!info.is_supported());
-    }
-
-    #[test]
-    fn classify_arm_device() {
-        let info = classify_device(0x3306);
-        assert_eq!(info.bootloader, BootloaderType::Arm);
-        assert_eq!(info.firmware, Some(FirmwareType::Am32));
-        assert!(info.is_supported());
-    }
-
-    #[test]
-    fn classify_atm_device() {
-        let info = classify_device(0x930A);
-        assert_eq!(info.bootloader, BootloaderType::Atm);
-        assert_eq!(info.firmware, None);
-        assert!(!info.is_supported());
-    }
-
-    #[test]
-    fn classify_unknown_device() {
-        let info = classify_device(0x1234);
-        assert_eq!(info.bootloader, BootloaderType::Unknown);
-        assert_eq!(info.firmware, None);
-        assert!(!info.is_supported());
-    }
-
-    #[test]
-    #[should_panic(expected = "BLHeli_S")]
-    fn ensure_supported_panics_on_sil() {
-        ensure_supported(0xE8B1);
-    }
-
-    #[test]
-    fn ensure_supported_arm() {
-        let info = ensure_supported(0x4706);
-        assert_eq!(info.firmware, Some(FirmwareType::Am32));
-    }
-
-    #[test]
-    #[should_panic(expected = "ATmega-based ESC")]
-    fn ensure_supported_panics_on_atm() {
-        ensure_supported(0x9307);
-    }
-
-    #[test]
-    #[should_panic(expected = "Unknown device")]
-    fn ensure_supported_panics_on_unknown() {
-        ensure_supported(0xDEAD);
-    }
-
-    #[test]
-    fn blheli32_heuristic() {
-        // Known AM32 devices should NOT be flagged
-        assert!(!might_be_blheli32(0x3306));
-        assert!(!might_be_blheli32(0x4706));
-
-        // Unknown device ending in 0x06 might be BLHeli_32
-        assert!(might_be_blheli32(0x9906));
-
-        // Random device should not match
-        assert!(!might_be_blheli32(0x1234));
-    }
-
-    // Compile-time verification of eeprom_offset mapping.
-    // eeprom_offset only depends on device_id, so we can construct DeviceInfo directly.
-    const _: () = {
-        const fn eeprom(device_id: u16) -> u16 {
-            DeviceInfo {
-                device_id,
-                bootloader: BootloaderType::Arm,
-                firmware: None,
+    fn am32_recognised_on_any_pin() {
+        // F7: PA6, PB4, PA15, PA0, PB2, PC6, PA2 on each flash size.
+        for pin in [0x06u8, 0x14, 0x0F, 0x00, 0x12, 0x26, 0x02] {
+            for flash in [0x1Fu8, 0x35, 0x2B] {
+                let info = classify_device(u16::from_le_bytes([pin, flash]));
+                assert_eq!(info.bootloader, BootloaderType::Arm);
+                assert_eq!(info.firmware, Some(FirmwareType::Am32));
+                assert_eq!((info.pin_code(), info.flash_code()), (pin, flash));
             }
-            .eeprom_offset()
         }
-        // STM32F051 variants → 0x7C00
-        assert!(eeprom(0x1F02) == 0x7C00);
-        assert!(eeprom(0x1F06) == 0x7C00);
-        // STM32G071 → 0x7E00
-        assert!(eeprom(0x2B06) == 0x7E00);
-        // AT32F421 / STM32F3xx → 0xF800
-        assert!(eeprom(0x3506) == 0xF800);
-        // Other ARM devices default to 0x7C00
-        assert!(eeprom(0x3306) == 0x7C00);
-        assert!(eeprom(0x4706) == 0x7C00);
-    };
+    }
 
     #[test]
-    fn all_known_sil_devices_unsupported() {
+    fn flash_codes_that_am32_does_not_use_are_unknown() {
+        for id in [0x3306u16, 0x3406, 0x4706, 0xDEAD] {
+            let info = classify_device(id);
+            assert_eq!(info.bootloader, BootloaderType::Unknown, "0x{id:04X}");
+            assert!(!info.is_supported());
+        }
+    }
+
+    #[test]
+    fn sil_and_atm_are_recognised_and_unsupported() {
         for &id in SIL_DEVICE_IDS {
             let info = classify_device(id);
             assert_eq!(info.bootloader, BootloaderType::Sil);
-            assert!(
-                !info.is_supported(),
-                "SIL device 0x{:04X} should be unsupported",
-                id
-            );
+            assert!(!info.is_supported());
         }
-    }
-
-    #[test]
-    fn all_known_arm_devices_supported() {
-        for &id in ARM_DEVICE_IDS {
+        for &id in ATM_DEVICE_IDS {
             let info = classify_device(id);
-            assert!(
-                info.is_supported(),
-                "ARM device 0x{:04X} should be supported",
-                id
-            );
-            assert_eq!(info.firmware, Some(FirmwareType::Am32));
+            assert_eq!(info.bootloader, BootloaderType::Atm);
+            assert!(!info.is_supported());
         }
     }
 }

@@ -42,11 +42,9 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: |
-          cargo build --target thumbv8m.main-none-eabihf -p esc-protocol -p esc-relay-core -p rtttl-rs
-          cargo build --target thumbv8m.main-none-eabihf -p esc-relay-core --features defmt
+        run: cargo build --target thumbv8m.main-none-eabihf -p esc-protocol -p esc-session -p rtttl-rs
       - name: Clippy (no warnings)
-        run: cargo clippy --target thumbv8m.main-none-eabihf -p esc-protocol -p esc-relay-core -p rtttl-rs -- -D warnings
+        run: cargo clippy --target thumbv8m.main-none-eabihf -p esc-protocol -p esc-session -p rtttl-rs -- -D warnings
 
   firmware:
     name: Relay firmware (RP2350)

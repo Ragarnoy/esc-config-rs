@@ -5,11 +5,13 @@
 /// - Output: LSB first, then MSB
 ///
 /// Reference implementation from BLHeli protocol documentation.
-pub fn crc16_ibm(buf: &[u8]) -> u16 {
+pub const fn crc16_ibm(buf: &[u8]) -> u16 {
     let mut crc: u16 = 0;
-    for &byte in buf {
-        let mut xb = byte;
-        for _ in 0..8 {
+    let mut i = 0;
+    while i < buf.len() {
+        let mut xb = buf[i];
+        let mut bit = 0;
+        while bit < 8 {
             if ((xb & 0x01) ^ (crc as u8 & 0x01)) != 0 {
                 crc >>= 1;
                 crc ^= 0xA001;
@@ -17,14 +19,16 @@ pub fn crc16_ibm(buf: &[u8]) -> u16 {
                 crc >>= 1;
             }
             xb >>= 1;
+            bit += 1;
         }
+        i += 1;
     }
     crc
 }
 
 /// Returns CRC bytes in wire order (LSB first, then MSB).
 #[inline]
-pub fn crc16_ibm_bytes(buf: &[u8]) -> [u8; 2] {
+pub const fn crc16_ibm_bytes(buf: &[u8]) -> [u8; 2] {
     let crc = crc16_ibm(buf);
     [crc as u8, (crc >> 8) as u8]
 }

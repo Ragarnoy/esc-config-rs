@@ -2,8 +2,8 @@
 resolver = "2"
 members = [
     "crates/esc-protocol",
+    "crates/esc-session",
     "crates/esc-configurator-cli",
-    "crates/esc-relay-core",
     "crates/esc-relay-fw",
     "crates/rtttl-rs",
 ]
@@ -12,8 +12,8 @@ members = [
 # Build it explicitly with: cargo build -p esc-relay-fw --target thumbv8m.main-none-eabihf
 default-members = [
     "crates/esc-protocol",
+    "crates/esc-session",
     "crates/esc-configurator-cli",
-    "crates/esc-relay-core",
     "crates/rtttl-rs",
 ]
 
@@ -24,8 +24,6 @@ license = "MIT"
 repository = "https://github.com/ragarnoy/esc-config-rs"
 
 [workspace.dependencies]
-thiserror = { version = "2.0.21", default-features = false }
-tokio = { version = "1.53.1", features = ["full"] }
 clap = { version = "4.6.7", features = ["derive"] }
 anyhow = "1.0.104"
 serialport = "4.10.1"

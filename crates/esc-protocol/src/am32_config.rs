@@ -174,7 +174,7 @@ impl fmt::Display for SignalType {
 // Based on EEprom_t union from AM32 firmware
 mod offsets {
     // Header (0x00-0x04)
-    pub const RESERVED_0: usize = 0x00; // Was boot_byte in older versions
+    pub const RESERVED_0: usize = 0x00; // Boot byte: the bootloader jumps only if 0x01
     pub const EEPROM_VERSION: usize = 0x01;
     pub const RESERVED_1: usize = 0x02; // Was bootloader_version in older versions
     pub const FIRMWARE_MAJOR: usize = 0x03;
@@ -189,8 +189,10 @@ mod offsets {
     pub const CURRENT_LIMIT_I: usize = 0x0A; // current_I: 0-255
     pub const CURRENT_LIMIT_D: usize = 0x0B; // current_D: 0-255
     pub const ACTIVE_BRAKE_STRENGTH: usize = 0x0C; // active_brake_power: 1-5%
+    #[allow(dead_code)]
+    pub const BRAKE_ON_ZERO_THROTTLE: usize = 0x0D; // brake_on_zero_throttle (not exposed yet)
 
-    // Reserved (0x0D-0x10)
+    // Reserved (0x0E-0x10)
 
     // Motor settings (0x11-0x1B)
     pub const DIRECTION_REVERSED: usize = 0x11; // dir_reversed
@@ -280,21 +282,43 @@ impl Am32Config {
         Self { raw }
     }
 
-    /// Create config with sensible default values.
+    /// EEPROM layout version written by current AM32 firmware (`EEPROM_VERSION`).
     ///
-    /// These defaults are suitable for most ESC configurations and match
-    /// typical AM32 factory settings. Use this after flashing new firmware
-    /// to initialize the EEPROM with working values.
+    /// Firmware treats a lower version as an old layout and overwrites bytes 5-11
+    /// with its own defaults on the next boot.
+    pub const CURRENT_EEPROM_VERSION: u8 = 4;
+
+    /// Create a config block holding only default values.
     ///
-    /// Note: AM32 v2.20+ no longer uses a boot byte at offset 0.
+    /// Melody and CAN bytes are erased (0xFF) and the firmware version bytes are
+    /// zero, so the firmware rewrites them on its next boot. Prefer reading the
+    /// ESC's block and calling [`Self::apply_defaults`], which keeps them.
     pub fn with_defaults() -> Self {
-        let mut config = Self::from_bytes([0u8; 256]);
+        let mut config = Self::from_bytes([0xFF; 256]);
+        config.raw[offsets::FIRMWARE_MAJOR] = 0;
+        config.raw[offsets::FIRMWARE_MINOR] = 0;
+        config.raw[offsets::RESERVED_1] = 0;
+        for b in &mut config.raw[0x0E..=0x10] {
+            *b = 0;
+        }
+        config.raw[offsets::BRAKE_ON_ZERO_THROTTLE] = 0;
+        config.apply_defaults();
+        config
+    }
 
-        // Reserved bytes - leave as 0 for v2.20+
-        // (Older firmware used offset 0 as boot byte, but this is now reserved)
-
-        // EEPROM version (typical for AM32 2.x)
-        config.raw[offsets::EEPROM_VERSION] = 0x02; // v2.20 uses version 2
+    /// Reset every setting to its default, keeping melody, CAN and version bytes.
+    ///
+    /// Also makes the ESC bootable (byte 0 = 0x01) and raises the EEPROM version
+    /// to [`Self::CURRENT_EEPROM_VERSION`] if it is lower, so the firmware keeps
+    /// these values instead of replacing them.
+    pub fn apply_defaults(&mut self) {
+        let config = self;
+        config.set_boot_byte(Self::BOOT_BYTE_ENABLED);
+        if config.raw[offsets::EEPROM_VERSION] < Self::CURRENT_EEPROM_VERSION
+            || config.raw[offsets::EEPROM_VERSION] == 0xFF
+        {
+            config.raw[offsets::EEPROM_VERSION] = Self::CURRENT_EEPROM_VERSION;
+        }
 
         // Throttle/Rate settings
         config.set_max_rate_of_change(100); // 10.0 display
@@ -352,8 +376,6 @@ impl Am32Config {
         // Sine mode
         config.set_sine_mode_range(5);
         config.set_sine_mode_power(5);
-
-        config
     }
 
     /// Get raw bytes.
@@ -1174,8 +1196,14 @@ pub enum Setting {
 impl Setting {
     /// Parse setting name from string.
     pub fn parse(s: &str) -> Option<Self> {
-        let s = s.to_lowercase().replace(['-', '_'], "");
-        match s.as_str() {
+        // Lowercase ASCII and drop '-' / '_' without allocating.
+        let mut buf = [0u8; 48];
+        let mut len = 0;
+        for b in s.bytes().filter(|b| !matches!(b, b'-' | b'_')) {
+            *buf.get_mut(len)? = b.to_ascii_lowercase();
+            len += 1;
+        }
+        match core::str::from_utf8(&buf[..len]).ok()? {
             // Throttle/Rate settings
             "maxrateofchange" | "maxrate" | "roc" => Some(Self::MaxRateOfChange),
             "minduty" => Some(Self::MinDuty),
@@ -1359,10 +1387,13 @@ impl Setting {
 
 /// Parse a value string into bool.
 pub fn parse_bool(s: &str) -> Option<bool> {
-    match s.to_lowercase().as_str() {
-        "on" | "true" | "yes" | "1" | "enabled" => Some(true),
-        "off" | "false" | "no" | "0" | "disabled" => Some(false),
-        _ => None,
+    let is = |words: &[&str]| words.iter().any(|w| w.eq_ignore_ascii_case(s));
+    if is(&["on", "true", "yes", "1", "enabled"]) {
+        Some(true)
+    } else if is(&["off", "false", "no", "0", "disabled"]) {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -2191,6 +2222,41 @@ direction_reversed = true
         assert_eq!(eeprom.len(), 48);
         assert_eq!(eeprom[0], 0x01);
         assert_eq!(eeprom[47], 0xFF);
+    }
+
+    #[test]
+    fn defaults_are_bootable_and_current() {
+        // F1: byte 0 = 0 left the ESC stuck in the bootloader.
+        let config = Am32Config::with_defaults();
+        assert_eq!(config.boot_status(), BootStatus::Bootable);
+        assert_eq!(config.eeprom_version(), Am32Config::CURRENT_EEPROM_VERSION);
+        // Melody and CAN erased, not zeroed.
+        assert!(config.as_bytes()[0x30..0xC0].iter().all(|&b| b == 0xFF));
+    }
+
+    #[test]
+    fn apply_defaults_keeps_melody_can_and_versions() {
+        let mut raw = [0u8; 256];
+        raw[0] = 0x00; // boot disabled
+        raw[1] = 5; // newer eeprom version: keep
+        raw[3] = 2;
+        raw[4] = 21;
+        raw[0x30..0xB0].fill(0x42);
+        raw[0xB0..0xB8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        let mut config = Am32Config::from_bytes(raw);
+        config.apply_defaults();
+
+        let b = config.as_bytes();
+        assert_eq!(b[0], 0x01);
+        assert_eq!(b[1], 5);
+        assert_eq!((b[3], b[4]), (2, 21));
+        assert!(b[0x30..0xB0].iter().all(|&x| x == 0x42));
+        assert_eq!(&b[0xB0..0xB8], &[1, 2, 3, 4, 5, 6, 7, 8]);
+
+        let mut old = Am32Config::from_bytes([0u8; 256]);
+        old.as_bytes_mut()[1] = 2;
+        old.apply_defaults();
+        assert_eq!(old.eeprom_version(), Am32Config::CURRENT_EEPROM_VERSION);
     }
 
     #[test]
