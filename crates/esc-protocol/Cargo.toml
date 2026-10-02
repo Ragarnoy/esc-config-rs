@@ -16,4 +16,4 @@ serde = { version = "1.0", default-features = false, features = ["derive"], opti
 rtttl-rs = { path = "../rtttl-rs" }
 
 [dev-dependencies]
-toml = "0.8"
+toml.workspace = true

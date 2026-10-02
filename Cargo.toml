@@ -24,26 +24,27 @@ license = "MIT"
 repository = "https://github.com/ragarnoy/esc-config-rs"
 
 [workspace.dependencies]
-thiserror = { version = "2.0", default-features = false }
-tokio = { version = "1", features = ["full"] }
-clap = { version = "4", features = ["derive"] }
-anyhow = "1.0"
-serialport = "4.8"
-dialoguer = "0.12"
-embassy-rp = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
-embassy-time = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
-embassy-executor = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
-embassy-time-driver = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
-embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
-embassy-sync = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
-embassy-futures = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
-embassy-usb = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
+thiserror = { version = "2.0.21", default-features = false }
+tokio = { version = "1.53.1", features = ["full"] }
+clap = { version = "4.6.7", features = ["derive"] }
+anyhow = "1.0.104"
+serialport = "4.10.1"
+dialoguer = "0.12.0"
+toml = "1.0"
+embassy-rp = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-time-driver = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-usb = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
 
 [patch.crates-io]
-embassy-rp = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
-embassy-time = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
-embassy-time-driver = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
-embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
+embassy-rp = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-time-driver = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
 
 [profile.release]
 debug = 2

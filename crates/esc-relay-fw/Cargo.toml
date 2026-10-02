@@ -14,12 +14,12 @@ path = "src/main.rs"
 
 [dependencies]
 # Embassy
-embassy-executor = { workspace = true, features = ["arch-cortex-m", "executor-thread", "defmt"] }
-embassy-rp = { workspace = true, features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp235xa"] }
+embassy-executor = { workspace = true, features = ["defmt"] }
+embassy-rp = { workspace = true, features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp235xa", "executor-thread"] }
 embassy-time = { workspace = true, features = ["defmt", "defmt-timestamp-uptime"] }
 embassy-usb = { workspace = true, features = ["defmt"] }
 embassy-sync = { workspace = true, features = ["defmt"] }
-embassy-futures = "0.1"
+embassy-futures.workspace = true
 
 # Cortex-M
 cortex-m-rt = "0.7"

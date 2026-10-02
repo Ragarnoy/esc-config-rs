@@ -101,7 +101,10 @@ static USB_TO_ESC: Channel<CriticalSectionRawMutex, DataPacket, 4> = Channel::ne
 /// Channel for ESC -> USB data
 static ESC_TO_USB: Channel<CriticalSectionRawMutex, DataPacket, 4> = Channel::new();
 
-#[embassy_executor::main]
+#[embassy_executor::main(
+    executor = "embassy_rp::executor::Executor",
+    entry = "cortex_m_rt::entry"
+)]
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
 
