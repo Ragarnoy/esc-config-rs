@@ -18,6 +18,7 @@ pub struct OneWireUart<'d, PIO: Instance, const SM_TX: usize, const SM_RX: usize
     pin: Pin<'d, PIO>,
 }
 
+#[allow(dead_code)] // `new`, `try_read`, `read` complete the API; only the relay's subset is used
 impl<'d, PIO: Instance, const SM_TX: usize, const SM_RX: usize> OneWireUart<'d, PIO, SM_TX, SM_RX> {
     /// Create a new single-wire UART on the given pin (takes ownership of Peri).
     pub fn new(

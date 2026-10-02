@@ -588,7 +588,7 @@ mod tests {
             0x00,
             0x01,
             0x2D,
-            0x03 ^ 0x68 ^ 0x00 ^ 0x01 ^ 0x2D,
+            (0x03 ^ 0x68) ^ 0x01 ^ 0x2D,
         ];
         session.handle_api_version_response(&api_response).unwrap();
         assert_eq!(session.state(), FourWayState::FcConnected);

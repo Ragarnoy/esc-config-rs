@@ -189,19 +189,13 @@ async fn esc_task(mut uart: onewire_uart::OneWireUart<'static, PIO0, 0, 1>) {
         // complete protocol commands before forwarding to ESC.
         // 2ms is enough to catch fragments from a single write (~1ms USB latency)
         // but short enough to not merge separate sequential commands (~20ms+ apart).
-        loop {
-            match with_timeout(Duration::from_millis(2), USB_TO_ESC.receive()).await {
-                Ok(pkt) => {
-                    let new_len = tx_len + pkt.len;
-                    if new_len <= tx_buf.len() {
-                        tx_buf[tx_len..new_len].copy_from_slice(pkt.as_slice());
-                        tx_len = new_len;
-                    } else {
-                        break;
-                    }
-                }
-                Err(_) => break,
+        while let Ok(pkt) = with_timeout(Duration::from_millis(2), USB_TO_ESC.receive()).await {
+            let new_len = tx_len + pkt.len;
+            if new_len > tx_buf.len() {
+                break;
             }
+            tx_buf[tx_len..new_len].copy_from_slice(pkt.as_slice());
+            tx_len = new_len;
         }
 
         // Detect write transaction: set_addr (6) + set_buffer (6) + data + crc (2+)

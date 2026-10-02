@@ -361,7 +361,7 @@ mod tests {
     #[test]
     fn parse_api_version_response_valid() {
         // Response with protocol=0, major=1, minor=45
-        let checksum = 0x03 ^ 0x68 ^ 0x00 ^ 0x01 ^ 0x2D;
+        let checksum = (0x03 ^ 0x68) ^ 0x01 ^ 0x2D;
         let data = [0x24, 0x4D, 0x3E, 0x03, 0x68, 0x00, 0x01, 0x2D, checksum];
         let (proto, major, minor) = parse_api_version_response(&data).unwrap();
         assert_eq!(proto, 0);

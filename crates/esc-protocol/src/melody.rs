@@ -522,7 +522,7 @@ mod tests {
 
         assert_eq!(melody.bpm(), 120);
         // Should have entries (one or more per note)
-        assert!(melody.len() > 0);
+        assert!(!melody.is_empty());
         // All entries should have non-zero freq_index (no pauses)
         assert!(melody.entries().iter().all(|e| e.freq_index > 0));
     }
@@ -591,7 +591,7 @@ mod tests {
         let rtttl = "doom:b=420,o=4,d=32:8g4,8e4,8b3,4e,8p,1a#3";
         let melody = Melody::from_rtttl(rtttl).unwrap();
         // Should parse without error
-        assert!(melody.len() > 0);
+        assert!(!melody.is_empty());
         assert_eq!(melody.bpm(), 420);
     }
 }

@@ -17,10 +17,10 @@ fn find_firmware_files() -> Vec<String> {
     if let Ok(entries) = fs::read_dir(root) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map(|e| e == "hex").unwrap_or(false) {
-                if let Some(s) = path.to_str() {
-                    files.push(s.to_string());
-                }
+            if path.extension().is_some_and(|e| e == "hex")
+                && let Some(s) = path.to_str()
+            {
+                files.push(s.to_string());
             }
         }
     }
@@ -72,12 +72,12 @@ fn test_real_firmware_parsing() {
 
         // Flash simulation (128-byte chunks)
         let chunk_size = 128;
-        let flash_chunks = (binary.len() + chunk_size - 1) / chunk_size;
+        let flash_chunks = binary.len().div_ceil(chunk_size);
         println!("  Flash chunks (128B): {}", flash_chunks);
 
         // Verify simulation (256-byte chunks)
         let chunk_size = 256;
-        let verify_chunks = (binary.len() + chunk_size - 1) / chunk_size;
+        let verify_chunks = binary.len().div_ceil(chunk_size);
         println!("  Verify chunks (256B): {}", verify_chunks);
 
         // Verify first bytes look like ARM code (stack pointer + reset vector)
@@ -144,7 +144,7 @@ fn test_firmware_verification_simulation() {
         );
         println!(
             "  Verification simulation passed ({} chunks)",
-            (expected.len() + 255) / 256
+            expected.len().div_ceil(256)
         );
 
         // Simulate a single-byte corruption
