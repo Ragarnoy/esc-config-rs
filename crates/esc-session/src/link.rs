@@ -73,3 +73,21 @@ pub trait Link {
     /// Wait, keeping the line idle (high).
     async fn delay(&mut self, duration: Duration);
 }
+
+/// A borrowed link is a link, so a caller can keep its transport when a session ends
+/// or fails to connect.
+impl<L: Link + ?Sized> Link for &mut L {
+    type Error = L::Error;
+
+    async fn send(&mut self, frame: &[u8]) -> Result<(), Self::Error> {
+        (**self).send(frame).await
+    }
+
+    async fn recv(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize, Self::Error> {
+        (**self).recv(buf, timeout).await
+    }
+
+    async fn delay(&mut self, duration: Duration) {
+        (**self).delay(duration).await;
+    }
+}

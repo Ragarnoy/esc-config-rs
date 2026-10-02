@@ -327,3 +327,67 @@ fn run_does_not_start_an_app_with_boot_byte_cleared() {
     let fake = block_on(connect(fake).run()).unwrap();
     assert!(!fake.started_app);
 }
+
+// ----------------------------------------------------------------------------
+// Stepwise flashing (what a server drives one request at a time)
+// ----------------------------------------------------------------------------
+
+#[test]
+fn stepwise_flash_over_a_borrowed_link() {
+    let mut fake = FakeEsc::new(Mcu::G071);
+    let img = image(1000);
+    {
+        let mut esc = block_on(Esc::connect(&mut fake)).unwrap();
+        block_on(esc.begin_flash()).unwrap();
+        block_on(esc.begin_flash()).unwrap(); // idempotent
+        for (i, chunk) in img.chunks(256).enumerate() {
+            block_on(esc.write_firmware_chunk(i * 256, chunk)).unwrap();
+        }
+        assert_eq!(esc_eeprom_byte0(&mut esc), 0x00);
+        block_on(esc.finish_flash()).unwrap();
+    }
+    // The caller still owns the link.
+    assert_eq!(&fake.flash[0x1000..0x1000 + 1000], img.as_slice());
+    assert_eq!(fake.eeprom()[0], 0x01);
+}
+
+fn esc_eeprom_byte0<L: esc_session::Link>(esc: &mut Esc<L>) -> u8
+where
+    L::Error: core::fmt::Debug,
+{
+    block_on(esc.read_eeprom()).unwrap()[0]
+}
+
+#[test]
+fn chunk_bounds_and_alignment_are_checked() {
+    let mut esc = connect(FakeEsc::new(Mcu::F051));
+    let max = esc.max_firmware_size();
+    assert_eq!(
+        block_on(esc.write_firmware_chunk(4, &[0; 8])),
+        Err(Error::BadAddress)
+    );
+    assert_eq!(
+        block_on(esc.write_firmware_chunk(max - 8, &[0; 16])),
+        Err(Error::ImageTooLarge { size: max + 8, max })
+    );
+    assert_eq!(
+        block_on(esc.write_firmware_chunk(0, &[])),
+        Err(Error::InvalidLength(0))
+    );
+}
+
+#[test]
+fn finish_without_begin_is_harmless() {
+    let mut esc = connect(FakeEsc::new(Mcu::F051));
+    block_on(esc.finish_flash()).unwrap();
+    assert_eq!(esc.into_link().eeprom()[0], 0x01);
+}
+
+#[test]
+fn failed_connect_leaves_the_link_with_the_caller() {
+    let mut fake = FakeEsc::new(Mcu::F051);
+    fake.drop_replies = 3;
+    assert!(block_on(Esc::connect(&mut fake)).is_err());
+    // Same link, second try.
+    block_on(Esc::connect(&mut fake)).unwrap();
+}

@@ -236,11 +236,9 @@ impl<L: Link> Esc<L> {
 
     /// Flash an app image (bytes from the app start, as in a hex file's binary).
     ///
-    /// Clears EEPROM byte 0 first, so a cut-off flash leaves the ESC in the
-    /// bootloader instead of booting half an image; writes 256-byte chunks in order
-    /// (the first chunk of each page erases it), padding the last chunk with `0xFF`
-    /// to a multiple of 8; reads each chunk back; then sets byte 0 to `0x01`. On
-    /// error, byte 0 stays `0x00`.
+    /// [`Self::begin_flash`], then [`Self::write_firmware_chunk`] for each 256-byte
+    /// chunk in order, then [`Self::finish_flash`]. On error, EEPROM byte 0 stays
+    /// `0x00`, so the ESC stays in its bootloader instead of booting half an image.
     ///
     /// `progress(done, total)` is called after each chunk.
     pub async fn flash_firmware(
@@ -249,32 +247,68 @@ impl<L: Link> Esc<L> {
         mut progress: impl FnMut(usize, usize),
     ) -> Result<(), L> {
         self.check_image(image)?;
-
-        let mut eeprom = self.read_eeprom().await?;
-        if eeprom[BOOT_BYTE] != 0x00 {
-            eeprom[BOOT_BYTE] = 0x00;
-            self.write_eeprom(&eeprom).await?;
-        }
-
-        let mut chunk = [0xFFu8; MAX_BLOCK];
-        let mut readback = [0u8; MAX_BLOCK];
+        self.begin_flash().await?;
         for (i, data) in image.chunks(MAX_BLOCK).enumerate() {
             let offset = i * MAX_BLOCK;
-            let len = data.len().next_multiple_of(WRITE_ALIGN);
-            chunk[..data.len()].copy_from_slice(data);
-            chunk[data.len()..len].fill(0xFF);
-
-            let addr = self.firmware_address(offset)?;
-            self.write_at(addr, &chunk[..len]).await?;
-            self.read_at(addr, &mut readback[..len]).await?;
-            if readback[..len] != chunk[..len] {
-                return Err(Error::Verify { offset });
-            }
+            self.write_firmware_chunk(offset, data).await?;
             progress(offset + data.len(), image.len());
         }
+        self.finish_flash().await
+    }
 
-        eeprom[BOOT_BYTE] = 0x01;
-        self.write_eeprom(&eeprom).await
+    /// Start a flash: clear EEPROM byte 0 so the bootloader will not start the app
+    /// until [`Self::finish_flash`]. Idempotent.
+    pub async fn begin_flash(&mut self) -> Result<(), L> {
+        self.set_boot_byte(0x00).await
+    }
+
+    /// Write one chunk of the app image (1..=256 bytes) `offset` bytes from the app
+    /// start, then read it back.
+    ///
+    /// `offset` must be a multiple of 8. The tail is padded with `0xFF` to a
+    /// multiple of 8. Write chunks in increasing order: the first chunk at each page
+    /// boundary erases the page.
+    pub async fn write_firmware_chunk(&mut self, offset: usize, data: &[u8]) -> Result<(), L> {
+        if data.is_empty() || data.len() > MAX_BLOCK {
+            return Err(Error::InvalidLength(data.len()));
+        }
+        if !offset.is_multiple_of(WRITE_ALIGN) {
+            return Err(Error::BadAddress);
+        }
+        let max = self.max_firmware_size();
+        if offset + data.len() > max {
+            return Err(Error::ImageTooLarge {
+                size: offset + data.len(),
+                max,
+            });
+        }
+
+        let len = data.len().next_multiple_of(WRITE_ALIGN);
+        let mut chunk = [0xFFu8; MAX_BLOCK];
+        chunk[..data.len()].copy_from_slice(data);
+
+        let addr = self.firmware_address(offset)?;
+        self.write_at(addr, &chunk[..len]).await?;
+        let mut readback = [0u8; MAX_BLOCK];
+        self.read_at(addr, &mut readback[..len]).await?;
+        if readback[..len] != chunk[..len] {
+            return Err(Error::Verify { offset });
+        }
+        Ok(())
+    }
+
+    /// End a flash: set EEPROM byte 0 to `0x01` so the bootloader starts the app.
+    pub async fn finish_flash(&mut self) -> Result<(), L> {
+        self.set_boot_byte(0x01).await
+    }
+
+    async fn set_boot_byte(&mut self, value: u8) -> Result<(), L> {
+        let mut eeprom = self.read_eeprom().await?;
+        if eeprom[BOOT_BYTE] != value {
+            eeprom[BOOT_BYTE] = value;
+            self.write_eeprom(&eeprom).await?;
+        }
+        Ok(())
     }
 
     /// Compare the app region with an image. `progress(done, total)` per chunk.
