@@ -7,8 +7,11 @@ description = "CLI tool for configuring BLHeli/AM32 ESCs"
 
 [dependencies]
 esc-protocol = { path = "../esc-protocol", features = ["std", "serde"] }
-esc-session = { path = "../esc-session" }
-embassy-futures.workspace = true
+esc-config-icd = { path = "../esc-config-icd", features = ["use-std"] }
+postcard-rpc = { workspace = true, features = ["use-std", "cobs-serial"] }
+postcard-schema = { workspace = true, features = ["use-std"] }
+heapless.workspace = true
+tokio = { version = "1", features = ["rt", "time"] }
 clap.workspace = true
 anyhow.workspace = true
 serialport.workspace = true

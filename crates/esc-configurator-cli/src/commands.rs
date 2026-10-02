@@ -45,15 +45,26 @@ pub fn interactive_config(device: Option<&str>) -> Result<()> {
     let device = match device {
         Some(d) => d.to_string(),
         None => {
-            let ports = crate::relay::list_ports()?;
-            if ports.is_empty() {
-                bail!("No serial ports found. Connect the relay MCU and try again.");
-            }
-            match ui::select_port(&ports)? {
-                Some(port) => port,
-                None => {
-                    println!("No port selected. Exiting.");
-                    return Ok(());
+            let relays = crate::relay::find_relays()?;
+            if let [only] = relays.as_slice() {
+                println!("Using relay on {only}");
+                only.clone()
+            } else {
+                // None or several relays recognised: let the user pick.
+                let ports = if relays.is_empty() {
+                    crate::relay::list_ports()?
+                } else {
+                    relays
+                };
+                if ports.is_empty() {
+                    bail!("No serial ports found. Connect the relay MCU and try again.");
+                }
+                match ui::select_port(&ports)? {
+                    Some(port) => port,
+                    None => {
+                        println!("No port selected. Exiting.");
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -734,11 +745,10 @@ pub fn read_config(device: &str, output: Option<&str>) -> Result<()> {
     let device_info = relay.device();
     println!("Connected: {}", format_device(device_info));
 
-    let reply = relay.connect_reply();
     let layout = relay.layout();
     println!("  Pin code:          0x{:02X}", device_info.pin_code());
     println!("  Flash code:        0x{:02X}", device_info.flash_code());
-    println!("  Bootloader proto:  {}", reply.protocol_version);
+    println!("  Bootloader proto:  {}", relay.info().protocol_version);
     println!(
         "  Layout (protocol units, shift {}): app 0x{:04X}, name 0x{:04X}, EEPROM 0x{:04X}",
         layout.address_shift, layout.firmware_start, layout.filename_start, layout.eeprom_start
@@ -945,41 +955,17 @@ pub fn backup_config(device: &str, output: &str) -> Result<()> {
 /// and version bytes are kept, and a backup with a different EEPROM layout
 /// version is refused.
 pub fn restore_config(device: &str, input: &str) -> Result<()> {
-    use esc_session::EEPROM_SIZE;
-
     if !Path::new(input).exists() {
         bail!("backup file not found: {input}");
     }
-
     let data = fs::read(input).with_context(|| format!("failed to read {input}"))?;
-
-    if data.len() != 256 && data.len() != EEPROM_SIZE {
-        bail!(
-            "invalid backup file: expected 256 or {EEPROM_SIZE} bytes, got {}",
-            data.len()
-        );
-    }
 
     println!("Connecting to ESC via {device}...");
     let mut relay = Relay::connect(device)?;
-
-    let device_info = relay.device();
-    println!("Connected: {}", format_device(device_info));
-
-    let mut config = relay.read_settings()?;
-    let current = config.as_bytes();
-    if data[1] != current[1] {
-        bail!(
-            "backup has EEPROM layout version {} but the ESC has {}; \
-             restore it on matching firmware, or use export/import (TOML)",
-            data[1],
-            current[1]
-        );
-    }
-    config.as_bytes_mut()[5..EEPROM_SIZE].copy_from_slice(&data[5..EEPROM_SIZE]);
+    println!("Connected: {}", format_device(relay.device()));
 
     println!("Writing configuration...");
-    relay.write_settings(&config)?;
+    relay.restore(&data)?;
 
     println!("Configuration restored from: {input}");
 

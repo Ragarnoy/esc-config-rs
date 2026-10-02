@@ -1,4 +1,5 @@
 mod commands;
+mod device;
 mod relay;
 mod ui;
 

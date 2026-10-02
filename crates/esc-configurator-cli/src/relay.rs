@@ -1,217 +1,152 @@
-//! Talking to an ESC through the relay MCU.
+//! The relay as an [`EscDevice`]: postcard-rpc over USB CDC, COBS-framed.
 //!
-//! [`RelayLink`] is an [`esc_session::Link`] over the relay's USB CDC passthrough:
-//! the relay forwards each USB write to the ESC wire as one frame and echoes it
-//! back (as a one-wire bus would), followed by the ESC's reply. All protocol
-//! sequencing and timing is in `esc-session`; [`Relay`] is a blocking facade over
-//! it for the CLI commands.
+//! The relay firmware runs the bootloader session itself; each call here is one
+//! request carrying one whole operation (`esc-config-icd`).
 
-use std::io::{ErrorKind, Read, Write};
-use std::time::{Duration as StdDuration, Instant};
+use std::time::Duration;
 
-use anyhow::{Context, Result};
-use embassy_futures::block_on;
-use esc_protocol::am32_config::Am32Config;
-use esc_protocol::device::DeviceInfo;
-use esc_protocol::layout::Layout;
-use esc_protocol::melody::MELODY_OFFSET;
-use esc_protocol::packet::{BAUD_RATE, ConnectResponse, MAX_BLOCK};
-use esc_session::{Duration, EEPROM_SIZE, Esc, Link, Timing};
-use serialport::{ClearBuffer, SerialPort};
+use anyhow::{Context, Result, anyhow};
+use esc_config_icd::{
+    ChunkReq, ConnectEndpoint, EEPROM_SIZE, EscError, EscInfo, FlashBeginEndpoint,
+    FlashChunkEndpoint, FlashFinishEndpoint, ReadEepromEndpoint, ReadEndpoint,
+    ReadFileNameEndpoint, ReadFirmwareEndpoint, ReadFirmwareReq, ReadReq, RunEndpoint,
+    ServerInfoEndpoint, WriteEepromEndpoint,
+};
+use postcard_rpc::Endpoint;
+use postcard_rpc::header::VarSeqKind;
+use postcard_rpc::host_client::HostClient;
+use postcard_rpc::standard_icd::{ERROR_PATH, WireError};
+use postcard_schema::Schema;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 
-/// The relay echoes a frame only after the ESC's reply (or its own reply
-/// timeout, 500 ms) has passed.
-const ECHO_TIMEOUT: StdDuration = StdDuration::from_millis(1500);
+use crate::device::{EscDevice, Session};
 
-/// Added to every reply timeout for USB and relay latency.
-const USB_MARGIN: StdDuration = StdDuration::from_millis(100);
+/// USB VID:PID of the relay firmware (pid.codes test PID).
+pub const RELAY_VID_PID: (u16, u16) = (0x1209, 0x0001);
 
-/// Settings bytes of the AM32 EEPROM: after boot byte and version bytes (0..5),
-/// before the melody (48..176).
-pub const SETTINGS: std::ops::Range<usize> = 5..MELODY_OFFSET;
+/// Longest any single operation may take (a 256-byte flash chunk with retries is
+/// well under a second; connect with retries about one).
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// [`esc_session::Link`] over the relay's USB passthrough.
-pub struct RelayLink {
-    port: Box<dyn SerialPort>,
+/// The relay, over its USB CDC port.
+pub struct RelayClient {
+    runtime: tokio::runtime::Runtime,
+    client: HostClient<WireError>,
 }
 
-impl RelayLink {
-    /// Open the relay's serial port.
-    pub fn open(device: &str) -> Result<Self> {
-        let port = serialport::new(device, BAUD_RATE)
-            .timeout(ECHO_TIMEOUT)
-            .open()
-            .with_context(|| format!("failed to open serial port: {device}"))?;
-        port.clear(ClearBuffer::All)
-            .context("failed to clear serial buffers")?;
-        Ok(Self { port })
+impl RelayClient {
+    /// Open the relay's serial port and check that relay firmware answers.
+    pub fn open(port: &str) -> Result<Self> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("failed to start the async runtime")?;
+        let client = runtime
+            .block_on(async {
+                HostClient::<WireError>::try_new_serial_cobs(
+                    port,
+                    ERROR_PATH,
+                    8,
+                    115_200,
+                    VarSeqKind::Seq2,
+                )
+            })
+            .map_err(|e| anyhow!("failed to open {port}: {e}"))?;
+        let mut relay = Self { runtime, client };
+        relay
+            .call::<ServerInfoEndpoint>(&())
+            .context("no answer from the relay firmware (old firmware, or not a relay?)")?;
+        Ok(relay)
     }
 
-    /// Read up to `buf.len()` bytes until `deadline`. Returns the count.
-    fn read_until(&mut self, buf: &mut [u8], deadline: Instant) -> std::io::Result<usize> {
-        let mut n = 0;
-        while n < buf.len() {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                break;
+    fn call<E>(&mut self, req: &E::Request) -> Result<E::Response>
+    where
+        E: Endpoint,
+        E::Request: Serialize + Schema,
+        E::Response: DeserializeOwned + Schema,
+    {
+        let client = &self.client;
+        self.runtime.block_on(async {
+            match tokio::time::timeout(REQUEST_TIMEOUT, client.send_resp::<E>(req)).await {
+                Ok(Ok(resp)) => Ok(resp),
+                Ok(Err(e)) => Err(anyhow!("relay request {} failed: {e:?}", E::PATH)),
+                Err(_) => Err(anyhow!("relay request {} timed out", E::PATH)),
             }
-            self.port.set_timeout(left)?;
-            match self.port.read(&mut buf[n..]) {
-                Ok(0) => return Err(ErrorKind::UnexpectedEof.into()),
-                Ok(k) => n += k,
-                Err(e) if e.kind() == ErrorKind::TimedOut => break,
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(n)
+        })
+    }
+
+    /// Call an endpoint whose response is `Result<T, EscError>`.
+    fn op<E, T>(&mut self, req: &E::Request) -> Result<T>
+    where
+        E: Endpoint<Response = Result<T, EscError>>,
+        E::Request: Serialize + Schema,
+        T: DeserializeOwned + Schema,
+    {
+        Ok(self.call::<E>(req)??)
     }
 }
 
-impl Link for RelayLink {
-    type Error = std::io::Error;
-
-    async fn send(&mut self, frame: &[u8]) -> std::io::Result<()> {
-        self.port.write_all(frame)?;
-        self.port.flush()?;
-        let mut echo = vec![0u8; frame.len()];
-        let n = self.read_until(&mut echo, Instant::now() + ECHO_TIMEOUT)?;
-        if n < frame.len() {
-            return Err(std::io::Error::new(
-                ErrorKind::TimedOut,
-                format!("relay echoed {n} of {} bytes", frame.len()),
-            ));
-        }
-        if echo != frame {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidData,
-                "relay echo does not match the frame sent",
-            ));
-        }
-        Ok(())
+impl EscDevice for RelayClient {
+    fn connect(&mut self) -> Result<EscInfo> {
+        self.op::<ConnectEndpoint, _>(&())
     }
 
-    async fn recv(&mut self, buf: &mut [u8], timeout: Duration) -> std::io::Result<usize> {
-        let timeout = StdDuration::from_micros(u64::from(timeout.as_micros())) + USB_MARGIN;
-        self.read_until(buf, Instant::now() + timeout)
+    fn read_eeprom(&mut self) -> Result<[u8; EEPROM_SIZE]> {
+        let data = self.op::<ReadEepromEndpoint, _>(&())?;
+        data.as_slice()
+            .try_into()
+            .map_err(|_| anyhow!("relay returned {} EEPROM bytes", data.len()))
     }
 
-    async fn delay(&mut self, duration: Duration) {
-        std::thread::sleep(StdDuration::from_micros(u64::from(duration.as_micros())));
+    fn write_eeprom(&mut self, data: &[u8; EEPROM_SIZE]) -> Result<()> {
+        let req = heapless::Vec::from_slice(data).map_err(|_| anyhow!("EEPROM too large"))?;
+        self.op::<WriteEepromEndpoint, _>(&req)
+    }
+
+    fn read_file_name(&mut self) -> Result<Vec<u8>> {
+        Ok(self.op::<ReadFileNameEndpoint, _>(&())?.to_vec())
+    }
+
+    fn read(&mut self, address: u16, len: u16) -> Result<Vec<u8>> {
+        Ok(self
+            .op::<ReadEndpoint, _>(&ReadReq { address, len })?
+            .to_vec())
+    }
+
+    fn flash_begin(&mut self) -> Result<()> {
+        self.op::<FlashBeginEndpoint, _>(&())
+    }
+
+    fn flash_chunk(&mut self, offset: u32, data: &[u8]) -> Result<()> {
+        let data = heapless::Vec::from_slice(data)
+            .map_err(|_| anyhow!("chunk of {} bytes too large", data.len()))?;
+        self.op::<FlashChunkEndpoint, _>(&ChunkReq { offset, data })
+    }
+
+    fn flash_finish(&mut self) -> Result<()> {
+        self.op::<FlashFinishEndpoint, _>(&())
+    }
+
+    fn read_firmware(&mut self, offset: u32, len: u16) -> Result<Vec<u8>> {
+        Ok(self
+            .op::<ReadFirmwareEndpoint, _>(&ReadFirmwareReq { offset, len })?
+            .to_vec())
+    }
+
+    fn run(&mut self) -> Result<()> {
+        self.op::<RunEndpoint, _>(&())
     }
 }
 
-/// A connected ESC, blocking API.
-///
-/// Dropping it leaves the ESC in its bootloader; [`Relay::run`] starts the app.
-pub struct Relay {
-    esc: Esc<RelayLink>,
-}
+/// A connected ESC behind the relay.
+pub type Relay = Session<RelayClient>;
 
-impl Relay {
-    /// Open the relay and connect to the ESC bootloader. Refuses non-AM32 ESCs.
-    pub fn connect(device: &str) -> Result<Self> {
-        let link = RelayLink::open(device)?;
-        let esc = block_on(Esc::connect_with(link, Timing::default()))
-            .context("failed to connect to the ESC bootloader")?;
-        Ok(Self { esc })
-    }
-
-    /// Device classification.
-    pub fn device(&self) -> DeviceInfo {
-        *self.esc.device()
-    }
-
-    /// Flash layout (protocol units).
-    pub fn layout(&self) -> Layout {
-        *self.esc.layout()
-    }
-
-    /// The raw connect reply.
-    pub fn connect_reply(&self) -> ConnectResponse {
-        *self.esc.connect_reply()
-    }
-
-    /// Firmware file name, e.g. `AM32_F4A_4IN1_F421`. Empty if none.
-    pub fn read_esc_name(&mut self) -> Result<String> {
-        let raw = block_on(self.esc.read_file_name()).context("failed to read the ESC name")?;
-        let end = raw
-            .iter()
-            .position(|&b| b == 0x00 || b == 0xFF)
-            .unwrap_or(raw.len());
-        Ok(String::from_utf8_lossy(&raw[..end]).into_owned())
-    }
-
-    /// Read the settings block (192 bytes; the rest of the 256-byte view is 0xFF).
-    pub fn read_settings(&mut self) -> Result<Am32Config> {
-        let eeprom = block_on(self.esc.read_eeprom()).context("failed to read settings")?;
-        let mut raw = [0xFFu8; 256];
-        raw[..EEPROM_SIZE].copy_from_slice(&eeprom);
-        Ok(Am32Config::from_bytes(raw))
-    }
-
-    /// Write the settings block (first 192 bytes: config, melody, CAN).
-    pub fn write_settings(&mut self, config: &Am32Config) -> Result<()> {
-        let mut block = [0u8; EEPROM_SIZE];
-        block.copy_from_slice(&config.as_bytes()[..EEPROM_SIZE]);
-        block_on(self.esc.write_eeprom(&block)).context("failed to write settings")
-    }
-
-    /// Write the settings of `edited` (bytes 5..48) over the ESC's current block.
-    ///
-    /// Boot byte, version bytes, melody and CAN settings stay as they are on the ESC,
-    /// so an edit made from an older read cannot undo a melody upload, and the
-    /// firmware does not see a version change.
-    pub fn update_settings(&mut self, edited: &Am32Config) -> Result<()> {
-        let mut current = self.read_settings()?;
-        current.as_bytes_mut()[SETTINGS].copy_from_slice(&edited.as_bytes()[SETTINGS]);
-        self.write_settings(&current)
-    }
-
-    /// Read 256 bytes at the EEPROM base (the backup file format).
-    pub fn read_eeprom_256(&mut self) -> Result<[u8; MAX_BLOCK]> {
-        let mut raw = [0u8; MAX_BLOCK];
-        let base = self.esc.layout().eeprom_start;
-        block_on(self.esc.read_at(base, &mut raw)).context("failed to read the EEPROM")?;
-        Ok(raw)
-    }
-
-    /// Read the 128-byte melody (settings bytes 48..176).
-    pub fn read_melody(&mut self) -> Result<[u8; 128]> {
-        let config = self.read_settings()?;
-        let mut melody = [0u8; 128];
-        melody.copy_from_slice(&config.as_bytes()[MELODY_OFFSET..MELODY_OFFSET + 128]);
-        Ok(melody)
-    }
-
-    /// Replace the melody, keeping every other setting (read-modify-write).
-    pub fn write_melody(&mut self, melody: &[u8; 128]) -> Result<()> {
-        let mut config = self.read_settings()?;
-        config.as_bytes_mut()[MELODY_OFFSET..MELODY_OFFSET + 128].copy_from_slice(melody);
-        self.write_settings(&config)
-    }
-
-    /// Flash an app image. See [`Esc::flash_firmware`].
-    pub fn flash_firmware(
-        &mut self,
-        image: &[u8],
-        progress: impl FnMut(usize, usize),
-    ) -> Result<()> {
-        block_on(self.esc.flash_firmware(image, progress)).context("flash failed")
-    }
-
-    /// Compare the app region with an image.
-    pub fn verify_firmware(
-        &mut self,
-        image: &[u8],
-        progress: impl FnMut(usize, usize),
-    ) -> Result<()> {
-        block_on(self.esc.verify_firmware(image, progress)).context("verify failed")
-    }
-
-    /// Leave the bootloader and start the ESC firmware (if EEPROM byte 0 is 0x01).
-    pub fn run(self) -> Result<()> {
-        block_on(self.esc.run()).context("failed to send Run")?;
-        Ok(())
+impl Session<RelayClient> {
+    /// Open the relay on `port` and connect to the ESC bootloader. Refuses
+    /// non-AM32 ESCs.
+    pub fn connect(port: &str) -> Result<Self> {
+        Self::new(RelayClient::open(port)?)
     }
 }
 
@@ -220,4 +155,17 @@ pub fn list_ports() -> Result<Vec<String>> {
     let ports = serialport::available_ports().context("failed to list serial ports")?;
 
     Ok(ports.into_iter().map(|p| p.port_name).collect())
+}
+
+/// Serial ports that are relays (by USB VID:PID).
+pub fn find_relays() -> Result<Vec<String>> {
+    let ports = serialport::available_ports().context("failed to list serial ports")?;
+    Ok(ports
+        .into_iter()
+        .filter(|p| {
+            matches!(&p.port_type, serialport::SerialPortType::UsbPort(u)
+                if (u.vid, u.pid) == RELAY_VID_PID)
+        })
+        .map(|p| p.port_name)
+        .collect())
 }
