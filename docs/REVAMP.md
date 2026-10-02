@@ -103,11 +103,26 @@ local type or `embassy-time` behind a feature.
 ## Phases
 
 ### Phase 0: baseline
-- [ ] Commit the working tree as it is (it builds and tests pass), so the revamp diffs
-      against something.
-- [ ] `cargo clippy --all-targets` clean (8 warnings now), `cargo fmt`.
-- [ ] CI: test, clippy, `no_std` build of the `no_std` crates for thumbv8m, firmware
-      build.
+- [x] Commit the working tree as it is (it builds and tests pass), so the revamp diffs
+      against something. (f07519a)
+- [x] `cargo clippy --all-targets` clean (8 warnings now), `cargo fmt`.
+- [x] CI: test, clippy, `no_std` build of the `no_std` crates for thumbv8m, firmware
+      build. (`.github/workflows/ci.yaml`, all with `-D warnings`)
+- [x] Embassy pinned to Elle's rev (`340bf1de`, same git URL so the lockfiles agree);
+      the firmware now uses `embassy_rp::executor::Executor` (the executor's
+      `arch-cortex-m` feature is gone at that rev). `toml` 0.8 → 1; everything else
+      at the latest semver-compatible release (`fixed` stays on 1.x, 2.0 is alpha).
+
+Noticed during Phase 0, for the audit:
+
+- `cargo test -p esc-protocol` alone fails: `tests/firmware_integration.rs` uses
+  `load_firmware`, which needs `std`. It only passes in `cargo test` because the CLI
+  turns `std` on through feature unification. Needs `required-features = ["std"]`.
+- Relay firmware, USB aggregation loop (`esc_task`): when a packet would overflow
+  `tx_buf`, the loop breaks and that packet is dropped, not forwarded.
+- `clippy::pedantic` reports ~500 warnings; most are cosmetic (`must_use`, doc
+  backticks), but ~45 are truncating casts (`u16`/`usize` → `u8`) worth checking.
+- `rtttl-rs` is still on edition 2021.
 
 ### Phase 1: audit (read-only, produces findings)
 - [ ] Every protocol claim in `docs/` and `CLAUDE.md` checked against the code and,
