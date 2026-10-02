@@ -45,6 +45,146 @@ target layout is a proposal, not a decision: the audit (Phase 1) may change it.
 - Timeouts differ between `protocol-direct.md` (25 / 50 / 75 ms) and the firmware
   (1 ms gaps, 100 / 200 / 500 ms). One table, measured, should win.
 
+Verdicts are in the Phase 1 findings below (P1–P6).
+
+## Phase 1 findings
+
+Checked against the AM32 bootloader (`am32-firmware/AM32-bootloader` @ `578ff29`,
+2026-09-17, `bootloader/main.c`, `Mcu/*/Src/eeprom.c`) and firmware
+(`am32-firmware/AM32` @ `2738df3`, `Inc/eeprom.h`, `Src/main.c`). Source-derived;
+items marked **bench** still need confirming on hardware. Severity: **S1** can leave
+an ESC unbootable or silently lose data, **S2** wrong behaviour on some hardware,
+**S3** cleanup.
+
+### How the bootloader actually behaves
+
+These facts drive the `esc-session` design.
+
+- **Entry.** At reset it samples the signal pin: with a pull-down, if the line is
+  mostly low it jumps to the app (unless this was a software reset); with a pull-up,
+  if it was never low it **stays**; if it floats and reads low once, it jumps. So a
+  line **driven high** at power-on keeps the bootloader. After that, a line held low
+  for 20 ms while waiting for a byte also jumps to the app.
+- **No inactivity timeout.** With the line idle high the bootloader waits for a start
+  bit forever. It jumps only when `invalid_command > 100` (bad CRC, bad command,
+  framing errors) or on a low line. DroneCAN builds resume CAN polling after ~10 s of
+  silence. **Keepalive is not needed** on a direct link; it exists for 4-way
+  passthrough.
+- **Framing is by gaps.** A message ends when no start bit comes within 5 bit times
+  of the previous byte's mid-stop-bit (~230 µs idle at 19200). Bytes of one frame
+  must be back to back; two frames need ≥ ~300 µs between them.
+- **Set Buffer** `FE 00 HI LO`: size is `256` if byte 2 is `0x01`, else byte 3. So
+  256 is `FE 00 01 00`, and `FE 00 00 00` means **zero** bytes. No reply on success;
+  `0xC2` on a bad CRC. There is **no time limit** between Set Buffer and the payload.
+- **Payload**: `size + 2` bytes; ACK `0x30`, or `0xC2` on bad CRC, in which case the
+  bootloader **stays in payload mode**: the next frame (even a Set Address) is taken
+  as payload. Recovery is to resend a well-formed payload of the same size.
+- **Prog flash** `01 xx CRC`: writes the buffer at the address. Erases the page
+  **only if the address is page-aligned** (F051/F421 1 KiB, G071 2 KiB). Address and
+  length must be multiples of 2 (F051), 4 (F421) or 8 (G071). Writes to the EEPROM
+  base get byte 2 overwritten with the bootloader version. Refuses addresses below
+  the app start (`0xC1`).
+- **Erase** `02 xx`: only checks the CRC and ACKs. It erases nothing.
+- **Read** `03 N`: `N = 0` means 256. Reply is `DATA CRC_L CRC_H 0x30`, no echo of
+  the command. The address resets after each read, so every read needs a Set Address.
+- **Set Address**: 16-bit, shifted left 2 on 128 KiB parts (G071). Values below 1024
+  are refused except magics: `0x20` EEPROM base, `0x21` file name, `0x22` continue
+  after last read, `0x23` devinfo (protocol v3: magic, deviceInfo, address shift,
+  firmware/filename/EEPROM/tune start).
+- **Run** `00 00 00 00` (CRC of `00 00` is `0000`) makes it jump; it still replies
+  `0xC1`. **Keepalive** `FD 00` replies `0xC1`. Anything else replies `0xC1`.
+- **Connect** reply is 9 bytes: `'4' '7' '1' PIN FLASH 06 06 PROTO 30`. `PIN` is
+  `port << 4 | pin` (PA2 `02`, PA6 `06`, PB4 `14`, PA15 `0F`, PA0 `00`, PB2 `12`, PC6
+  `26`); `FLASH` is `1F` 32K, `35` 64K, `2B` 128K (NXP: `15`, `16`).
+- **Boot gate**: the bootloader jumps only if EEPROM byte 0 is `0x01` and the app's
+  vector table looks sane.
+- **EEPROM** (`EEprom_t`) is 192 bytes: config 0–47, tune 48–175, CAN 176–183,
+  reserved 184–191. The firmware saves all 192. `EEPROM_VERSION` is 4.
+
+### Verdicts on the inconsistencies above
+
+- **P1 Bootloader entry: driven high.** "Power-on with signal held low" in CLAUDE.md
+  and README is wrong. Corollary: the RP2350 pad default is pull-down,
+  so a relay that resets or loses power makes the ESC leave the bootloader after
+  20 ms (if byte 0 is `0x01`). Bench: confirm both.
+- **P2 ESC pin: GPIO15** (code). Module doc is stale.
+- **P3 Set Buffer ACK: none on success.** `Relay::write_256` (3-byte `FE 00 00`, then
+  waits for an ACK) is dead and wrong; delete it.
+- **P4 Set Buffer format: `FE 00 HI LO`**. The relay-fw doc's "x256" is the right idea;
+  README/`protocol-direct.md` "SIZE=0 means 256" is wrong, and so is the firmware's
+  `tx_buf[9] == 0 → 256`. `packet.rs` has it backwards: `OP_WRITE_256` (`FE 00 01 00`)
+  is the AM32 form, and `build_write_page_packet` (`FE 00 CRC`) is not valid for AM32.
+- **P5 Timeouts.** Neither table is right; the bootloader has no command timeouts.
+  Derived numbers to confirm on the bench:
+
+  | Step | Expected reply | Suggested timeout |
+  |---|---|---|
+  | Connect | 9 bytes, ~5 ms | 100 ms, retry |
+  | Set Address | `30`, < 1 ms after frame end | 20 ms |
+  | Set Buffer | none; send payload ≥ 0.3 ms later | n/a |
+  | Payload ≤ 256 | `30`, ~1 ms | 20 ms |
+  | Prog flash | `30`, erase + program + verify | 100 ms (bench G071 2 KiB erase) |
+  | Read N | N+3 bytes, ~0.52 ms each (256: ~135 ms) | 50 ms + 0.6 ms × (N+3) |
+  | Within a frame | inter-byte gap | < 200 µs (hard limit ~230 µs) |
+
+- **P6 "ESC rejects 256-byte writes (NACK 0xC1)"** is almost certainly the size
+  encoding: `256 as u8 = 0` sends `FE 00 00 00`, a zero-length buffer. The
+  bootloader's receive buffer is 258 bytes; `FE 00 01 00` should work. Bench.
+
+### Findings
+
+| # | Sev | Where | Finding | Fix |
+|---|---|---|---|---|
+| F1 | S1 | `am32_config.rs` `with_defaults`, `reset-defaults` | Writes byte 0 = `0x00`. The bootloader then never jumps to the app: `reset-defaults` leaves the ESC stuck in the bootloader. The comment "byte 0 is reserved now" is wrong; `flash_firmware` relies on it as the boot gate. Also sets `eeprom_version = 2`, so the firmware replaces bytes 5–11 with its own defaults on next boot. | Byte 0 = `0x01`; keep the ESC's version bytes (RMW); never write version < 4. |
+| F2 | S1 | `relay.rs` `write_eeprom_block` | Writes 176 bytes at the page-aligned EEPROM base, so the page is erased and CAN settings (176–183) are lost on every save. | Write the full 192-byte struct (multiple of 8). |
+| F3 | S1 | `bootloader.rs` `validate_read_response`; `read_32/48/128` | Read CRC is never checked (TODO). Backups, verify and RMW can carry corrupted bytes, and RMW writes them back. | Check CRC on every read; retry. |
+| F4 | S1 | `commands.rs` `restore_config` | Restores only bytes 0–47 of a 256-byte backup: melody and CAN are not restored. No check that the backup matches the ESC. | Restore 192 bytes; refuse mismatched layout/version. |
+| F5 | S2 | `commands.rs` flash + verify | `firmware_start = 0x1000` and no address shift. G071 (`2B`): writes to real `0x4000`, so the app lands in the wrong place and the ESC stays in the bootloader. DroneCAN bootloaders (app at `0x4000`) refuse the writes. u16 arithmetic (`binary.len() as u16`, `0x1000 + offset`) wraps for > 60 KiB images. | Take firmware start, EEPROM, file name and shift from devinfo (magic `0x23`, protocol v3), fall back to the flash-size code. Address the hex's own load address. |
+| F6 | S2 | `relay.rs` `read_esc_name`, `read_melody` | `eeprom - 32` and `eeprom + 48` in protocol units: on G071 these are 128 / 192 bytes off. Writes are unaffected (whole block). | Use magics `0x21` and `0x20` + offsets, or devinfo. |
+| F7 | S2 | `device.rs` | ID table lists `1F02 1F06 3306 3406 3506 2B06 4706`: flash codes `33 34 47` do not exist in AM32, and pins PB4/PA15/PA0/PB2/PC6 are rejected as unknown. `might_be_blheli32` (low byte `06` = "ARM-ish") is meaningless: `06` is pin PA6. `ensure_supported` panics. | Classify AM32 by `"471"` + `06 06` + flash code; read devinfo for the rest. Errors, not panics. |
+| F8 | S2 | `flash_firmware` retry loop | After a `0xC2` the bootloader stays in payload mode, so each retry's Set Address is consumed as payload; the 8 retries cannot recover. | On `0xC2`, resend the payload; model this in the fake ESC. |
+| F9 | S2 | `ihex::to_binary`, flash | Last chunk is not padded: odd / non-multiple-of-8 lengths are refused (`0xC1`) on F051/F421/G071. | Pad with `0xFF` to 8 bytes. |
+| F10 | S2 | `relay-fw` `onewire_uart::write` | Each `write()` ends with a 530 µs wait and the next starts with 100 µs, so payload and CRC sent by two `write()` calls are ~110–170 µs apart, against a ~230 µs frame limit. Works today, little margin. | One `write()` per frame. In `esc-session`: `Link::send` = one frame. |
+| F11 | S2 | `relay-fw` set-buffer path | Host sending Set Buffer and payload in one USB write is forwarded as one burst; the bootloader then treats the payload as part of the Set Buffer frame and the next frame as payload. Matters for am32.ca direct-connect. | Goes away with typed operations (Phase 3). |
+| F12 | S2 | `commands.rs` `read_config` (`read` command) | Reads 16 bytes at `0xF7AC` (`DEVICE_ID_ADDRESS`, a BLHeli_S/SiLabs address). On 32 KiB parts that is past the end of flash; at best garbage, at worst a bus fault in the bootloader. Same for `TIMESTAMP_ADDRESS 0xEB00`. | Remove; show devinfo instead. |
+| F13 | S2 | `disconnect` | Sends `00 01`, which the bootloader answers `0xC1` and ignores; the ESC stays in the bootloader. "The ESC will restart with the new firmware" is false. | `Run` = `00 00 00 00`; say so in the CLI. |
+| F14 | S2 | BLHeli_S | `backup`, `restore`, `read` do not check firmware type and use AM32 addresses (`0x7C00`) on SiLabs parts; BLHeli_S uses a different EEPROM location and write flow. Nothing BLHeli_S is exercised on hardware. | Mark unsupported; refuse non-AM32 everywhere. |
+| F15 | S3 | relay-fw | Aggregation loop drops a USB packet that would overflow `tx_buf` (noted in Phase 0). `DataPacket::new` silently clamps to 280 bytes. | Gone with Phase 3; until then, error out. |
+| F16 | S3 | `relay.rs` | `write_chunk` sends `size as u8` (256 → 0); `read_flash` silently truncates `size` to 256; `read_esc_name` maps invalid UTF-8 to `""`. | Typed sizes in `esc-session`. |
+| F17 | S3 | `flash_firmware` | Page-erase loop sends `0x02` per page: a no-op (the bootloader erases on aligned writes), with a hardcoded 1 KiB page. | Drop. |
+| F18 | S3 | dead code | `Relay::{keepalive, write_256, erase_page, read_timestamp}`; `packet::{OP_WRITE_PAGE, build_write_page_packet, build_erase_page_packet, ADDR_*}`; `esc-relay-core` (whole crate); 10 `#[allow(dead_code)]` constants in `am32_config.rs`. | Delete in Phase 2. |
+| F19 | S3 | `am32_config.rs` | Byte 13 is `brake_on_zero_throttle` in current AM32, treated as reserved here (RMW preserves it). `ConfigBlock` and CLI output call the block "encrypted" (BLHeli_S wording). `reset-defaults` mentions the deleted `beep_test`/`motor_test`. | Add the field; fix wording. |
+| F20 | S3 | panics | `.expect("should be connected")` ×15 in `commands.rs` (all after a successful `connect`, so safe); `from_utf8(..).unwrap()` in `melody_info` (guarded by `is_rtttl_format`); `spawn(..).unwrap()` in firmware `main` (fine). | Keep; F7 removes the real panics. |
+| F21 | S3 | `esc-protocol` tests | `cargo test -p esc-protocol` fails without `std` (Phase 0 note). | `required-features = ["std"]`. |
+
+Unit tests exist for `crc`, `packet`, `bootloader`, `device`, `config`,
+`am32_config`, `melody`, `ihex`, `msp`, `fourway*`, `rtttl-rs`. None for `relay.rs`,
+`commands.rs` or the firmware, which is where F1–F13 live. The tests that exist
+encode several of the errors above (device table, the `FE 00` write-page packet, the
+`00 01` disconnect), so they pass while the behaviour is wrong.
+
+### Scope answers
+
+- **MSP + four-way**: the CLI does not use them (no `esc_protocol::msp`/`fourway`
+  import), Elle does not need them. Recommend: drop them from `esc-protocol`; git
+  keeps them if Betaflight passthrough comes back.
+- **BLHeli_S**: not exercised anywhere; mark unsupported (F14).
+- **Flashing**: F051 (`1F`) and 64 KiB parts (`35`) work on paper; G071 is broken
+  (F5); DroneCAN bootloaders are refused. No test covers the shift.
+
+### Bench checklist (needs hardware)
+
+- [ ] Entry: ESC power-on with the line driven high / pulled low / floating;
+      relay reset while the ESC is in the bootloader (expect: leaves after 20 ms).
+- [ ] Idle: leave a connected ESC 60 s without traffic; expect it still answers
+      (no keepalive needed).
+- [ ] 256-byte write with `FE 00 01 00` (P6).
+- [ ] Timings in P5 with a logic analyser, especially Prog flash on G071 if one is
+      available, and the payload→CRC gap from the relay (F10).
+- [ ] `00 00 00 00` starts the app; `00 01` does not (F13).
+- [ ] Byte 0 = `0x00` keeps the ESC in the bootloader after power cycle (F1). Use
+      an ESC with a backup.
+
 ## Target layout (proposal)
 
 ```
@@ -125,16 +265,17 @@ Noticed during Phase 0, for the audit:
 - `rtttl-rs` is still on edition 2021.
 
 ### Phase 1: audit (read-only, produces findings)
-- [ ] Every protocol claim in `docs/` and `CLAUDE.md` checked against the code and,
+- [x] Every protocol claim in `docs/` and `CLAUDE.md` checked against the code and,
       where possible, against AM32's bootloader source. Mismatches listed above get a
-      verdict.
-- [ ] Every public item: used? tested? Dead code listed for removal.
-- [ ] Error handling: `unwrap`/`expect`/silent truncation (`DataPacket::new` clamps to
-      280 bytes without telling anyone) listed.
+      verdict. (P1–P6; source-based, bench items open)
+- [x] Every public item: used? tested? Dead code listed for removal. (F18)
+- [x] Error handling: `unwrap`/`expect`/silent truncation (`DataPacket::new` clamps to
+      280 bytes without telling anyone) listed. (F3, F15, F16, F20)
 - [ ] Bench: bootloader entry (high vs low, power cycle or signal-timeout reset), the
       real inter-command timeouts, keepalive interval. Record in
       `docs/protocol-direct.md`.
-- [ ] Output: a findings list in this file, each with a fix or a "won't fix".
+- [x] Output: a findings list in this file, each with a fix or a "won't fix".
+      (Phase 1 findings; scope answers need a decision)
 
 ### Phase 2: core extraction
 - [ ] `Link` trait + `esc-session` + fake ESC tests.
