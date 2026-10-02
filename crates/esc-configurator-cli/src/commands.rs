@@ -12,7 +12,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use esc_protocol::am32_config::{Am32Config, Am32ConfigData, Setting, apply_setting};
-use esc_protocol::config::ConfigBlock;
 use esc_protocol::device::{DeviceInfo, FirmwareType};
 use esc_protocol::ihex::{Firmware, load_firmware};
 
@@ -63,17 +62,10 @@ pub fn interactive_config(device: Option<&str>) -> Result<()> {
     // Initial connection to read config
     println!("Connecting to ESC via {}...", device);
 
-    let mut relay = Relay::open(&device)?;
-    relay.connect()?;
+    let mut relay = Relay::connect(&device)?;
 
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(*device_info));
-
-    // Check if this is AM32
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Interactive config only supported for AM32 ESCs.");
-    }
+    let device_info = relay.device();
+    println!("Connected: {}", format_device(device_info));
 
     if let Ok(name) = relay.read_esc_name()
         && !name.is_empty()
@@ -82,17 +74,12 @@ pub fn interactive_config(device: Option<&str>) -> Result<()> {
     }
 
     println!("Reading configuration...");
-    let config_block = relay.read_config()?;
+    let mut config = relay.read_settings()?;
 
-    // Disconnect - the bootloader will timeout anyway during menu browsing
-    // We'll reconnect when we need to save
-    relay.disconnect()?;
+    // Release the port while browsing menus; the ESC stays in its bootloader and
+    // we reconnect to save.
     drop(relay);
 
-    // Parse as AM32 config
-    let mut raw = [0u8; 256];
-    raw.copy_from_slice(config_block.as_bytes());
-    let mut config = Am32Config::from_bytes(raw);
     let original_config = config.clone();
 
     let (fw_major, fw_minor) = config.firmware_version();
@@ -251,18 +238,8 @@ fn handle_melody_menu(device: &str) -> Result<()> {
 
 /// Read raw melody data from ESC (for viewing in interactive mode).
 fn read_melody_from_esc(device: &str) -> Result<[u8; 128]> {
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
-
-    let device_info = relay.session().device().expect("should be connected");
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Melody support only available for AM32 ESCs");
-    }
-
-    let data = relay.read_melody()?;
-    relay.disconnect()?;
-    Ok(data)
+    let mut relay = Relay::connect(device)?;
+    relay.read_melody()
 }
 
 /// Save configuration to ESC by reconnecting and writing.
@@ -273,19 +250,10 @@ fn read_melody_from_esc(device: &str) -> Result<[u8; 128]> {
 fn save_config_to_esc(device: &str, config: &Am32Config) -> Result<()> {
     println!("Reconnecting to ESC...");
 
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
-
-    // Read current config first - this primes the connection for writing.
-    // Without this read, the ESC will NACK the write command.
-    println!("Preparing for write...");
-    let _ = relay.read_config()?;
+    let mut relay = Relay::connect(device)?;
 
     println!("Writing configuration...");
-    let config_block = ConfigBlock::from_array(*config.as_bytes());
-    relay.write_config(&config_block)?;
-
-    relay.disconnect()?;
+    relay.update_settings(config)?;
     println!("Configuration saved successfully!");
 
     Ok(())
@@ -757,372 +725,263 @@ fn edit_single_setting(config: &mut Am32Config, setting: Setting, name: &str) ->
 // Original Commands
 // =============================================================================
 
-/// Read configuration from ESC and display info.
+/// Read the ESC's identity, layout and EEPROM and display them.
 pub fn read_config(device: &str, output: Option<&str>) -> Result<()> {
     println!("Connecting to ESC via {device}...");
 
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
+    let mut relay = Relay::connect(device)?;
 
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(*device_info));
+    let device_info = relay.device();
+    println!("Connected: {}", format_device(device_info));
 
-    println!("Reading configuration...");
-    let config = relay.read_config()?;
-
-    // Display config as hex dump
-    println!("\nConfiguration block (256 bytes, encrypted):");
-    print_hex_dump(config.as_bytes());
-
-    // Save to file if requested
-    if let Some(path) = output {
-        fs::write(path, config.as_bytes())
-            .with_context(|| format!("failed to write config to {path}"))?;
-        println!("\nConfig saved to: {path}");
+    let reply = relay.connect_reply();
+    let layout = relay.layout();
+    println!("  Pin code:          0x{:02X}", device_info.pin_code());
+    println!("  Flash code:        0x{:02X}", device_info.flash_code());
+    println!("  Bootloader proto:  {}", reply.protocol_version);
+    println!(
+        "  Layout (protocol units, shift {}): app 0x{:04X}, name 0x{:04X}, EEPROM 0x{:04X}",
+        layout.address_shift, layout.firmware_start, layout.filename_start, layout.eeprom_start
+    );
+    if let Ok(name) = relay.read_esc_name() {
+        println!(
+            "  Firmware name:     {}",
+            if name.is_empty() { "(empty)" } else { &name }
+        );
     }
 
-    // Read device ID block
-    println!("\nReading device ID...");
-    let device_id = relay.read_device_id()?;
-    println!("Device ID block:");
-    print_hex_line(&device_id);
+    println!("Reading EEPROM...");
+    let eeprom = relay.read_eeprom_256()?;
+    println!("\nEEPROM (256 bytes at the EEPROM base; AM32 uses the first 192):");
+    print_hex_dump(&eeprom);
 
-    // Disconnect cleanly
-    relay.disconnect()?;
-    println!("\nDisconnected.");
+    if let Some(path) = output {
+        fs::write(path, eeprom).with_context(|| format!("failed to write EEPROM to {path}"))?;
+        println!("\nEEPROM saved to: {path}");
+    }
 
     Ok(())
 }
 
-/// Flash firmware hex file to ESC.
-///
-/// # Safety
-/// This function handles the boot byte (safety bit) to prevent bricking:
-/// 1. Clears boot byte before flash (ESC won't boot corrupted firmware)
-/// 2. Restores boot byte after successful flash
-/// 3. Attempts to restore boot byte even on failure
-pub fn flash_firmware(device: &str, hex_file: &str) -> Result<()> {
-    use indicatif::{ProgressBar, ProgressStyle};
+/// Address of the start of flash in AM32 hex files.
+const FLASH_BASE: u32 = 0x0800_0000;
 
-    // Validate file exists
+/// Load a hex file as an app image: (image bytes, its app offset in bytes).
+fn load_image(hex_file: &str) -> Result<(Vec<u8>, u32)> {
     if !Path::new(hex_file).exists() {
         bail!("hex file not found: {hex_file}");
     }
-
-    // Load and parse firmware
     println!("Loading firmware from {hex_file}...");
     let content =
         fs::read_to_string(hex_file).with_context(|| format!("failed to read {hex_file}"))?;
     let firmware =
         load_firmware(&content).with_context(|| format!("failed to parse {hex_file}"))?;
-    let binary = firmware.to_binary();
-
+    let min = firmware
+        .min_address()
+        .context("hex file contains no data")?;
+    let image = firmware.to_binary();
     println!(
-        "Firmware size: {} bytes ({:.1} KB)",
-        binary.len(),
-        binary.len() as f64 / 1024.0
+        "Firmware size: {} bytes ({:.1} KB), at 0x{:08X}",
+        image.len(),
+        image.len() as f64 / 1024.0,
+        min
     );
-    if let Some(min) = firmware.min_address() {
-        println!(
-            "Address range: 0x{:08X} - 0x{:08X}",
-            min,
-            firmware.max_address().unwrap_or(min)
+    Ok((image, min.checked_sub(FLASH_BASE).unwrap_or(min)))
+}
+
+/// Refuse an image that does not start at this ESC's app start.
+fn check_image_start(relay: &Relay, offset: u32) -> Result<()> {
+    let expected = relay.layout().firmware_byte_offset();
+    if offset != expected {
+        bail!(
+            "firmware starts at app offset 0x{offset:X}, but this ESC's bootloader expects \
+             0x{expected:X} (DroneCAN bootloaders use 0x4000, others 0x1000)"
         );
     }
+    Ok(())
+}
 
-    // Connect to ESC
-    println!("\nConnecting to ESC via {device}...");
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
-
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(*device_info));
-
-    // Check if this is AM32
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Firmware flashing only supported for AM32 ESCs");
-    }
-
-    // Read ESC firmware name and verify MCU type matches HEX file
+/// Refuse a hex file whose name names a different MCU than the ESC's firmware.
+fn check_mcu_name(relay: &mut Relay, hex_file: &str) -> Result<()> {
     match relay.read_esc_name() {
         Ok(esc_name) if !esc_name.is_empty() => {
             println!("ESC firmware: {esc_name}");
-            // Extract MCU type from ESC name (last segment after '_')
-            if let Some(esc_mcu) = esc_name.rsplit('_').next() {
-                // Extract MCU type from HEX filename for comparison
-                let hex_basename = Path::new(hex_file)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
-                // HEX filenames look like "AM32_F4A_4IN1_F421_2.20"
-                // Strip version suffix (last segment with a dot) then take MCU type
-                let hex_parts: Vec<&str> = hex_basename.split('_').collect();
-                let hex_mcu = hex_parts
-                    .iter()
-                    .rev()
-                    .find(|part| !part.contains('.'))
-                    .copied()
-                    .unwrap_or("");
-
-                if !hex_mcu.is_empty() && !hex_mcu.eq_ignore_ascii_case(esc_mcu) {
-                    relay.disconnect()?;
-                    bail!(
-                        "MCU type mismatch: ESC has '{}' but firmware is for '{}'. \
-                         Flashing wrong firmware can brick the ESC!",
-                        esc_mcu,
-                        hex_mcu
-                    );
-                }
+            let esc_mcu = esc_name.rsplit('_').next().unwrap_or("");
+            // HEX filenames look like "AM32_F4A_4IN1_F421_2.20": skip the version.
+            let hex_basename = Path::new(hex_file)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            let hex_mcu = hex_basename
+                .split('_')
+                .rev()
+                .find(|part| !part.contains('.'))
+                .unwrap_or("");
+            if !hex_mcu.is_empty() && !esc_mcu.is_empty() && !hex_mcu.eq_ignore_ascii_case(esc_mcu)
+            {
+                bail!(
+                    "MCU type mismatch: ESC has '{esc_mcu}' but firmware is for '{hex_mcu}'. \
+                     Flashing wrong firmware can brick the ESC!"
+                );
             }
         }
         Ok(_) => println!("ESC firmware name: (empty)"),
         Err(e) => println!("Could not read ESC name: {e}"),
     }
+    Ok(())
+}
 
-    // Step 1: Clear boot byte (SAFETY)
-    println!("\nPreparing ESC for flash...");
-    let mut eeprom = relay.read_eeprom()?;
-    let original_boot_byte = eeprom[0];
-    println!("  Boot byte: 0x{:02X}", original_boot_byte);
+fn byte_progress_bar(len: usize) -> indicatif::ProgressBar {
+    use indicatif::{ProgressBar, ProgressStyle};
 
-    eeprom[0] = 0x00; // Clear boot byte - ESC won't boot if flash fails
-    relay.write_eeprom(&eeprom)?;
-    println!("  Boot byte cleared (safety mode)");
-
-    // Step 2: Flash firmware in 128-byte chunks
-    let chunk_size = 128usize;
-    let total_chunks = binary.len().div_ceil(chunk_size);
-    let max_retries = 8;
-    let firmware_start: u16 = 0x1000; // AM32 firmware starts at 4KB (after bootloader)
-
-    let pb = ProgressBar::new(total_chunks as u64);
+    let pb = ProgressBar::new(len as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} chunks ({eta})")
-            .unwrap()
+            .template("{spinner:.green} [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+            .expect("valid template")
             .progress_chars("#>-"),
     );
+    pb
+}
 
-    // Step 2a: Erase flash pages before writing
-    let page_size: u16 = 1024; // AM32 uses 1KB pages
-    let first_page = firmware_start / page_size;
-    let last_page = (firmware_start + binary.len() as u16 - 1) / page_size;
-    let num_pages = last_page - first_page + 1;
+/// Flash firmware hex file to ESC.
+///
+/// `esc-session` clears the boot byte first and sets it only after every chunk is
+/// written and read back, so a failed flash leaves the ESC in its bootloader,
+/// ready for another attempt.
+pub fn flash_firmware(device: &str, hex_file: &str) -> Result<()> {
+    let (image, offset) = load_image(hex_file)?;
+
+    println!("\nConnecting to ESC via {device}...");
+    let mut relay = Relay::connect(device)?;
+    println!("Connected: {}", format_device(relay.device()));
+
+    check_image_start(&relay, offset)?;
+    check_mcu_name(&mut relay, hex_file)?;
+
     println!(
-        "\nErasing {} pages (0x{:04X}-0x{:04X})...",
-        num_pages,
-        first_page * page_size,
-        (last_page + 1) * page_size - 1
+        "\nFlashing {} bytes (boot byte cleared until done)...",
+        image.len()
     );
-    for page in first_page..=last_page {
-        let page_addr = page * page_size;
-        relay.set_address(page_addr)?;
-        relay.erase_page()?;
-    }
-    println!("  Pages erased");
-
-    println!(
-        "\nFlashing {} chunks to 0x{:04X}...",
-        total_chunks, firmware_start
-    );
-
-    for chunk_idx in 0..total_chunks {
-        let start = chunk_idx * chunk_size;
-        let end = (start + chunk_size).min(binary.len());
-        let chunk = &binary[start..end];
-        let address = firmware_start + (chunk_idx * chunk_size) as u16;
-
-        // Retry loop
-        let mut retries = 0;
-        loop {
-            match relay.write_chunk(address, chunk) {
-                Ok(()) => break,
-                Err(e) if retries < max_retries => {
-                    retries += 1;
-                    pb.println(format!(
-                        "  Retry {}/{} at 0x{:04X}: {}",
-                        retries, max_retries, address, e
-                    ));
-                }
-                Err(e) => {
-                    // CRITICAL: Try to restore boot byte before failing
-                    pb.finish_with_message("FAILED");
-                    println!("\n  Attempting to restore boot byte...");
-                    eeprom[0] = original_boot_byte;
-                    if relay.write_eeprom(&eeprom).is_ok() {
-                        println!("  Boot byte restored");
-                    } else {
-                        println!("  WARNING: Could not restore boot byte!");
-                    }
-                    relay.disconnect().ok();
-                    bail!(
-                        "Flash failed at 0x{:04X} after {} retries: {}",
-                        address,
-                        retries,
-                        e
-                    );
-                }
-            }
+    let pb = byte_progress_bar(image.len());
+    let result = relay.flash_firmware(&image, |done, _| pb.set_position(done as u64));
+    match result {
+        Ok(()) => pb.finish_with_message("done"),
+        Err(e) => {
+            pb.abandon();
+            return Err(e.context(
+                "the ESC stays in its bootloader (boot byte cleared); flash again to recover",
+            ));
         }
-        pb.inc(1);
     }
-    pb.finish_with_message("done");
 
-    // Step 3: Restore boot byte
-    // Preserve the original EEPROM (user settings), only re-enable boot.
-    println!("\nFinalizing...");
-    eeprom[0] = 0x01; // Enable boot
-    relay.write_eeprom(&eeprom)?;
-    println!("  Boot byte restored (0x01)");
-
-    // Step 4: Disconnect
-    relay.disconnect()?;
-
-    println!("\nFirmware flashed successfully!");
-    println!("The ESC will restart with the new firmware.");
-
+    println!("\nFirmware flashed and verified.");
+    println!(
+        "The ESC is still in its bootloader: run `esc-configurator run -d {device}` or \
+         power-cycle it without the relay attached."
+    );
     Ok(())
 }
 
 /// Verify ESC firmware against hex file.
-///
-/// Reads the firmware from the ESC and compares it against the hex file.
 pub fn verify_firmware(device: &str, hex_file: &str) -> Result<()> {
-    use indicatif::{ProgressBar, ProgressStyle};
+    let (image, offset) = load_image(hex_file)?;
 
-    if !Path::new(hex_file).exists() {
-        bail!("hex file not found: {hex_file}");
-    }
-
-    // Load firmware from hex file
-    println!("Loading firmware from {hex_file}...");
-    let content =
-        fs::read_to_string(hex_file).with_context(|| format!("failed to read {hex_file}"))?;
-    let firmware =
-        load_firmware(&content).with_context(|| format!("failed to parse {hex_file}"))?;
-    let binary = firmware.to_binary();
-
-    println!(
-        "Firmware size: {} bytes ({:.1} KB)",
-        binary.len(),
-        binary.len() as f64 / 1024.0
-    );
-
-    // Connect to ESC
     println!("\nConnecting to ESC via {device}...");
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
+    let mut relay = Relay::connect(device)?;
+    println!("Connected: {}", format_device(relay.device()));
+    check_image_start(&relay, offset)?;
 
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(*device_info));
-
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Firmware verification only supported for AM32 ESCs");
-    }
-
-    // Verify in 256-byte chunks (more efficient reads)
-    let chunk_size = 256usize;
-    let total_chunks = binary.len().div_ceil(chunk_size);
-    let firmware_start: u16 = 0x1000; // AM32 firmware starts at 4KB
-
-    let pb = ProgressBar::new(total_chunks as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} chunks")
-            .unwrap()
-            .progress_chars("#>-"),
-    );
-
-    println!("\nVerifying {} chunks...", total_chunks);
-
-    let mut mismatches = 0;
-    for chunk_idx in 0..total_chunks {
-        let start = chunk_idx * chunk_size;
-        let end = (start + chunk_size).min(binary.len());
-        let expected = &binary[start..end];
-        let address = firmware_start + (chunk_idx * chunk_size) as u16;
-
-        let actual = relay.read_flash(address, expected.len())?;
-
-        if actual != expected {
-            mismatches += 1;
-            pb.println(format!(
-                "  Mismatch at 0x{:04X}: expected {:02X?}..., got {:02X?}...",
-                address,
-                &expected[..8.min(expected.len())],
-                &actual[..8.min(actual.len())]
-            ));
-        }
-        pb.inc(1);
-    }
-
+    println!("\nVerifying {} bytes...", image.len());
+    let pb = byte_progress_bar(image.len());
+    let result = relay.verify_firmware(&image, |done, _| pb.set_position(done as u64));
     pb.finish();
-    relay.disconnect()?;
-
-    if mismatches > 0 {
-        bail!("Verification FAILED: {} chunk(s) did not match", mismatches);
-    }
+    result?;
 
     println!("\nFirmware verified successfully!");
     Ok(())
 }
 
-/// Backup ESC configuration to file.
+/// Leave the bootloader and start the ESC firmware.
+pub fn run_firmware(device: &str) -> Result<()> {
+    println!("Connecting to ESC via {device}...");
+    let mut relay = Relay::connect(device)?;
+    println!("Connected: {}", format_device(relay.device()));
+
+    let config = relay.read_settings()?;
+    if !config.is_bootable() {
+        bail!(
+            "EEPROM boot byte is 0x{:02X}, not 0x01: the bootloader would not start the \
+             firmware. Flash or restore first.",
+            config.boot_byte()
+        );
+    }
+    relay.run()?;
+    println!("Run sent; the ESC firmware is starting.");
+    Ok(())
+}
+
+/// Backup ESC configuration to file (256 bytes at the EEPROM base).
 pub fn backup_config(device: &str, output: &str) -> Result<()> {
     println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
+    let mut relay = Relay::connect(device)?;
 
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(*device_info));
+    let device_info = relay.device();
+    println!("Connected: {}", format_device(device_info));
 
     println!("Reading configuration...");
-    let config = relay.read_config()?;
+    let eeprom = relay.read_eeprom_256()?;
 
-    fs::write(output, config.as_bytes())
-        .with_context(|| format!("failed to write backup to {output}"))?;
+    fs::write(output, eeprom).with_context(|| format!("failed to write backup to {output}"))?;
 
     println!("Backup saved to: {output}");
-
-    relay.disconnect()?;
-    println!("Disconnected.");
 
     Ok(())
 }
 
 /// Restore ESC configuration from file.
+///
+/// Restores settings, melody and CAN settings (bytes 5..192). The ESC's boot byte
+/// and version bytes are kept, and a backup with a different EEPROM layout
+/// version is refused.
 pub fn restore_config(device: &str, input: &str) -> Result<()> {
+    use esc_session::EEPROM_SIZE;
+
     if !Path::new(input).exists() {
         bail!("backup file not found: {input}");
     }
 
     let data = fs::read(input).with_context(|| format!("failed to read {input}"))?;
 
-    if data.len() != 256 {
+    if data.len() != 256 && data.len() != EEPROM_SIZE {
         bail!(
-            "invalid backup file: expected 256 bytes, got {}",
+            "invalid backup file: expected 256 or {EEPROM_SIZE} bytes, got {}",
             data.len()
         );
     }
 
-    let config = ConfigBlock::from_bytes(&data);
-
     println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
+    let mut relay = Relay::connect(device)?;
 
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(*device_info));
+    let device_info = relay.device();
+    println!("Connected: {}", format_device(device_info));
+
+    let mut config = relay.read_settings()?;
+    let current = config.as_bytes();
+    if data[1] != current[1] {
+        bail!(
+            "backup has EEPROM layout version {} but the ESC has {}; \
+             restore it on matching firmware, or use export/import (TOML)",
+            data[1],
+            current[1]
+        );
+    }
+    config.as_bytes_mut()[5..EEPROM_SIZE].copy_from_slice(&data[5..EEPROM_SIZE]);
 
     println!("Writing configuration...");
-    relay.write_config(&config)?;
+    relay.write_settings(&config)?;
 
     println!("Configuration restored from: {input}");
-
-    relay.disconnect()?;
-    println!("Disconnected.");
 
     Ok(())
 }
@@ -1130,19 +989,13 @@ pub fn restore_config(device: &str, input: &str) -> Result<()> {
 /// Export ESC configuration as TOML (AM32 only).
 pub fn export_config(device: &str, output: &str) -> Result<()> {
     println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
+    let mut relay = Relay::connect(device)?;
 
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(*device_info));
-
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("TOML export only supported for AM32 ESCs.");
-    }
+    let device_info = relay.device();
+    println!("Connected: {}", format_device(device_info));
 
     println!("Reading configuration...");
-    let config_block = relay.read_config()?;
+    let config_block = relay.read_settings()?;
 
     let mut raw = [0u8; 256];
     raw.copy_from_slice(config_block.as_bytes());
@@ -1155,9 +1008,6 @@ pub fn export_config(device: &str, output: &str) -> Result<()> {
     fs::write(output, &toml_string).with_context(|| format!("failed to write TOML to {output}"))?;
 
     println!("Configuration exported to: {output}");
-
-    relay.disconnect()?;
-    println!("Disconnected.");
 
     Ok(())
 }
@@ -1175,27 +1025,17 @@ pub fn import_config(device: &str, input: &str) -> Result<()> {
         .with_context(|| format!("failed to parse TOML from {input}"))?;
 
     let config = Am32Config::from(&data);
-    let config_block = ConfigBlock::from_array(*config.as_bytes());
 
     println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
+    let mut relay = Relay::connect(device)?;
 
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(*device_info));
+    let device_info = relay.device();
+    println!("Connected: {}", format_device(device_info));
 
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("TOML import only supported for AM32 ESCs.");
-    }
-
-    println!("Writing configuration...");
-    relay.write_config(&config_block)?;
+    println!("Writing settings (melody, CAN and version bytes are kept)...");
+    relay.update_settings(&config)?;
 
     println!("Configuration imported from: {input}");
-
-    relay.disconnect()?;
-    println!("Disconnected.");
 
     Ok(())
 }
@@ -1284,20 +1124,13 @@ fn print_firmware_info(firmware: &Firmware) {
 pub fn show_config(device: &str) -> Result<()> {
     println!("Connecting to ESC via {device}...");
 
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
+    let mut relay = Relay::connect(device)?;
 
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(*device_info));
-
-    // Check if this is AM32
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Config parsing only supported for AM32 ESCs. Use 'read' for raw dump.");
-    }
+    let device_info = relay.device();
+    println!("Connected: {}", format_device(device_info));
 
     println!("Reading configuration...");
-    let config_block = relay.read_config()?;
+    let config_block = relay.read_settings()?;
 
     // Parse as AM32 config
     let mut raw = [0u8; 256];
@@ -1307,9 +1140,6 @@ pub fn show_config(device: &str) -> Result<()> {
     // Display parsed config
     println!();
     println!("{config}");
-
-    relay.disconnect()?;
-    println!("Disconnected.");
 
     Ok(())
 }
@@ -1324,26 +1154,14 @@ pub fn set_config(device: &str, setting_name: &str, value: &str) -> Result<()> {
 
     println!("Connecting to ESC via {device}...");
 
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
+    let mut relay = Relay::connect(device)?;
 
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(*device_info));
-
-    // Check if this is AM32
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Config modification only supported for AM32 ESCs.");
-    }
+    let device_info = relay.device();
+    println!("Connected: {}", format_device(device_info));
 
     // Read current config
     println!("Reading current configuration...");
-    let config_block = relay.read_config()?;
-
-    // Parse as AM32 config
-    let mut raw = [0u8; 256];
-    raw.copy_from_slice(config_block.as_bytes());
-    let mut config = Am32Config::from_bytes(raw);
+    let mut config = relay.read_settings()?;
 
     // Apply the setting change
     apply_setting(&mut config, setting, value)
@@ -1351,15 +1169,10 @@ pub fn set_config(device: &str, setting_name: &str, value: &str) -> Result<()> {
 
     println!("Setting {setting_name} = {value}");
 
-    // Write back
-    let new_config = ConfigBlock::from_array(*config.as_bytes());
     println!("Writing configuration...");
-    relay.write_config(&new_config)?;
+    relay.write_settings(&config)?;
 
     println!("Configuration updated successfully!");
-
-    relay.disconnect()?;
-    println!("Disconnected.");
 
     Ok(())
 }
@@ -1410,28 +1223,20 @@ pub fn list_settings() {
     println!("  esc-configurator set -d /dev/ttyACM0 -s timing -v 2");
 }
 
-/// Reset ESC configuration to sensible defaults.
+/// Reset ESC settings to sensible defaults.
 ///
-/// This writes a default configuration suitable for most ESC setups.
-/// Useful after flashing new firmware when EEPROM may have bad data.
+/// Read-modify-write: melody, CAN settings and firmware version bytes are kept,
+/// the boot byte is set to 0x01 and the EEPROM layout version raised to current.
 pub fn reset_defaults(device: &str) -> Result<()> {
     println!("Connecting to ESC via {device}...");
 
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
+    let mut relay = Relay::connect(device)?;
 
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(*device_info));
+    let device_info = relay.device();
+    println!("Connected: {}", format_device(device_info));
 
-    // Check if this is AM32
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Reset defaults only supported for AM32 ESCs.");
-    }
-
-    // Create default config
-    println!("Creating default configuration...");
-    let config = Am32Config::with_defaults();
+    let mut config = relay.read_settings()?;
+    config.apply_defaults();
 
     // Show what we're about to write
     println!();
@@ -1447,18 +1252,10 @@ pub fn reset_defaults(device: &str) -> Result<()> {
     println!("  Stall Protection:  On");
     println!();
 
-    // Write config
-    let config_block = ConfigBlock::from_array(*config.as_bytes());
     println!("Writing default configuration...");
-    relay.write_config(&config_block)?;
+    relay.write_settings(&config)?;
 
     println!("Configuration reset to defaults!");
-    println!();
-    println!("The ESC should now accept DShot signals.");
-    println!("Power cycle the ESC and test with beep_test or motor_test.");
-
-    relay.disconnect()?;
-    println!("Disconnected.");
 
     Ok(())
 }
@@ -1491,14 +1288,6 @@ fn print_hex_dump(data: &[u8]) {
     }
 }
 
-/// Print a single line of hex bytes.
-fn print_hex_line(data: &[u8]) {
-    for byte in data {
-        print!("{byte:02X} ");
-    }
-    println!();
-}
-
 // =============================================================================
 // Melody Commands
 // =============================================================================
@@ -1506,21 +1295,13 @@ fn print_hex_line(data: &[u8]) {
 /// Download melody from ESC to file.
 pub fn melody_download(device: &str, output: &str) -> Result<()> {
     println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
+    let mut relay = Relay::connect(device)?;
 
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(*device_info));
-
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Melody support only available for AM32 ESCs");
-    }
+    let device_info = relay.device();
+    println!("Connected: {}", format_device(device_info));
 
     println!("Reading melody data...");
     let data = relay.read_melody()?;
-
-    relay.disconnect()?;
 
     // Check if melody exists
     if data[0] == esc_protocol::MELODY_EMPTY {
@@ -1589,21 +1370,13 @@ pub fn melody_upload(device: &str, input: &str) -> Result<()> {
     };
 
     println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
+    let mut relay = Relay::connect(device)?;
 
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(*device_info));
-
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Melody support only available for AM32 ESCs");
-    }
+    let device_info = relay.device();
+    println!("Connected: {}", format_device(device_info));
 
     println!("Writing melody data...");
     relay.write_melody(&melody_data)?;
-
-    relay.disconnect()?;
     println!("Melody uploaded successfully!");
 
     Ok(())
@@ -1612,22 +1385,14 @@ pub fn melody_upload(device: &str, input: &str) -> Result<()> {
 /// Clear melody from ESC.
 pub fn melody_clear(device: &str) -> Result<()> {
     println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
+    let mut relay = Relay::connect(device)?;
 
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(*device_info));
-
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Melody support only available for AM32 ESCs");
-    }
+    let device_info = relay.device();
+    println!("Connected: {}", format_device(device_info));
 
     println!("Clearing melody...");
     let empty = esc_protocol::Melody::clear_bytes();
     relay.write_melody(&empty)?;
-
-    relay.disconnect()?;
     println!("Melody cleared!");
 
     Ok(())

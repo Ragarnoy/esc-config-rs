@@ -7,7 +7,8 @@ description = "CLI tool for configuring BLHeli/AM32 ESCs"
 
 [dependencies]
 esc-protocol = { path = "../esc-protocol", features = ["std", "serde"] }
-tokio.workspace = true
+esc-session = { path = "../esc-session" }
+embassy-futures.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 serialport.workspace = true

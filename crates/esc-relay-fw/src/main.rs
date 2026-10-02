@@ -297,17 +297,17 @@ async fn esc_task(mut uart: onewire_uart::OneWireUart<'static, PIO0, 0, 1>) {
         }
 
         // Check if this is a set_buffer command (0xFE) - NO ACK expected
-        // Strict check: exactly 6 bytes [0xFE, 0x00, 0x00, SIZE, CRC_L, CRC_H]
-        // to avoid false matches on raw firmware data starting with 0xFE.
+        // Strict check: exactly 6 bytes [0xFE, 0x00, HI, LO, CRC_L, CRC_H], HI = 1
+        // meaning 256 bytes, to avoid false matches on raw data starting with 0xFE.
         //
         // After SetBuffer, the ESC expects the data payload immediately.
         // We must handle SetBuffer → Data atomically to avoid USB latency
         // causing the ESC to timeout between the two commands.
         let is_set_buffer =
-            tx_len == 6 && tx_buf[0] == 0xFE && tx_buf[1] == 0x00 && tx_buf[2] == 0x00;
+            tx_len == 6 && tx_buf[0] == 0xFE && tx_buf[1] == 0x00 && tx_buf[2] <= 0x01;
         if is_set_buffer {
-            // Parse expected data size from SetBuffer command
-            let data_size = if tx_buf[3] == 0 {
+            // Parse expected data size from SetBuffer command (AM32: byte 2 = 1 is 256)
+            let data_size = if tx_buf[2] == 0x01 {
                 256usize
             } else {
                 tx_buf[3] as usize
@@ -353,13 +353,14 @@ async fn esc_task(mut uart: onewire_uart::OneWireUart<'static, PIO0, 0, 1>) {
             // Send SetBuffer to ESC (no ACK expected)
             uart.write(&tx_buf[..6]).await;
 
-            // Send data + CRC to ESC atomically after SetBuffer
-            // Recompute CRC from the actual data (ignore client CRC)
+            // Send data + CRC to ESC as one frame after SetBuffer: the bootloader
+            // ends a frame after ~230 us of idle line, and each uart.write() leaves
+            // a gap. Recompute CRC from the actual data (ignore client CRC).
             let data_crc = crc16_ibm(&data_buf[..data_size]);
+            data_buf[data_size] = data_crc as u8;
+            data_buf[data_size + 1] = (data_crc >> 8) as u8;
             Timer::after_millis(1).await;
-            uart.write(&data_buf[..data_size]).await;
-            let crc_bytes = [data_crc as u8, (data_crc >> 8) as u8];
-            uart.write(&crc_bytes).await;
+            uart.write(&data_buf[..data_size + 2]).await;
 
             // Wait for ESC ACK
             let timeout_ms = if data_size > 64 { 200 } else { 100 };

@@ -136,6 +136,13 @@ enum Commands {
         device: String,
     },
 
+    /// Leave the bootloader and start the ESC firmware
+    Run {
+        /// Serial port device
+        #[arg(short, long)]
+        device: String,
+    },
+
     /// List available serial ports
     Ports,
 
@@ -203,8 +210,7 @@ enum MelodyCommands {
     },
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Determine which command to run (default to Config)
@@ -265,6 +271,9 @@ async fn main() -> anyhow::Result<()> {
                 return Ok(());
             }
             commands::reset_defaults(&device)?;
+        }
+        Commands::Run { device } => {
+            commands::run_firmware(&device)?;
         }
         Commands::Ports => {
             commands::list_ports()?;
