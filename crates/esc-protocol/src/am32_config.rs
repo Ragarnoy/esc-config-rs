@@ -302,18 +302,20 @@ impl Am32Config {
             *b = 0;
         }
         config.raw[offsets::BRAKE_ON_ZERO_THROTTLE] = 0;
+        config.set_boot_byte(Self::BOOT_BYTE_ENABLED);
         config.apply_defaults();
         config
     }
 
-    /// Reset every setting to its default, keeping melody, CAN and version bytes.
+    /// Reset every setting to its default, keeping the boot byte, melody, CAN and
+    /// version bytes.
     ///
-    /// Also makes the ESC bootable (byte 0 = 0x01) and raises the EEPROM version
-    /// to [`Self::CURRENT_EEPROM_VERSION`] if it is lower, so the firmware keeps
-    /// these values instead of replacing them.
+    /// Raises the EEPROM version to [`Self::CURRENT_EEPROM_VERSION`] if it is lower,
+    /// so the firmware keeps these values instead of replacing them. The boot byte
+    /// is not a setting: it is `0x00` after a failed flash on purpose, and setting
+    /// it would let the bootloader start a half-written app.
     pub fn apply_defaults(&mut self) {
         let config = self;
-        config.set_boot_byte(Self::BOOT_BYTE_ENABLED);
         if config.raw[offsets::EEPROM_VERSION] < Self::CURRENT_EEPROM_VERSION
             || config.raw[offsets::EEPROM_VERSION] == 0xFF
         {
@@ -2247,7 +2249,7 @@ direction_reversed = true
         config.apply_defaults();
 
         let b = config.as_bytes();
-        assert_eq!(b[0], 0x01);
+        assert_eq!(b[0], 0x00, "boot byte kept (cleared by a failed flash)");
         assert_eq!(b[1], 5);
         assert_eq!((b[3], b[4]), (2, 21));
         assert!(b[0x30..0xB0].iter().all(|&x| x == 0x42));

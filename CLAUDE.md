@@ -109,7 +109,9 @@ The essentials:
 - Frames end on ~230 µs of idle line: bytes of a frame back to back, frames apart.
 - Write: Set Address → Set Buffer (`FE 00 00 N`, or `FE 00 01 00` for 256; **no
   reply**) → ≥0.3 ms gap → payload + CRC (`30`, or `C2`: still waiting for a
-  payload) → Prog Flash `01 01` (`30`). Lengths are multiples of 8.
+  payload) → Prog Flash `01 01` (`30`). Lengths are multiples of 8. In payload mode
+  any command frame is ACKed *as the payload* (zero-filled CRC check), so a Set
+  Address there is silently swallowed; `Esc::write_at` relies on this to resync.
 - A write at a page-aligned address erases the page, so the 192-byte settings
   structure (config 0–47, melody 48–175, CAN 176–183) is always written whole.
 - EEPROM byte 0 must be `0x01` or the bootloader never starts the app.

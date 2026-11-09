@@ -8,7 +8,7 @@ target layout is a proposal, not a decision: the audit (Phase 1) may change it.
 
 ## Where things stand (2026-10-02, Phase 3 code done, bench pending)
 
-- `esc-session` holds the bootloader driver; 27 tests run it against a simulated AM32
+- `esc-session` holds the bootloader driver; 30 tests run it against a simulated AM32
   bootloader. `esc-protocol` is reduced to AM32 frames, classification, layout,
   settings layout, melody and Intel HEX, all `no_std`. `esc-relay-core`, MSP and
   four-way are gone.
@@ -84,6 +84,12 @@ These facts drive the `esc-session` design.
 - **Payload**: `size + 2` bytes; ACK `0x30`, or `0xC2` on bad CRC, in which case the
   bootloader **stays in payload mode**: the next frame (even a Set Address) is taken
   as payload. Recovery is to resend a well-formed payload of the same size.
+- **A command frame is a valid payload.** `receiveBuffer` zero-fills `rxBuffer`
+  and `decodeInput` checks the CRC over the announced `size`; a frame that ends in
+  its own CRC (every command frame but connect) followed by zeros has CRC 0, so in
+  payload mode it is **ACKed as the payload**. A Set Address sent in payload mode
+  is swallowed with `0x30`: the next read or write goes to the old address. The
+  session uses this: a Set Address always ends payload mode.
 - **Prog flash** `01 xx CRC`: writes the buffer at the address. Erases the page
   **only if the address is page-aligned** (F051/F421 1 KiB, G071 2 KiB). Address and
   length must be multiples of 2 (F051), 4 (F421) or 8 (G071). Writes to the EEPROM
@@ -300,7 +306,7 @@ Findings status after Phase 2:
 
 | # | Status |
 |---|---|
-| F1 | Fixed: `Am32Config::apply_defaults` (byte 0 = 1, version ≥ 4, keeps melody/CAN/versions); `reset-defaults` is read-modify-write. |
+| F1 | Fixed: `reset-defaults` is read-modify-write (`Am32Config::apply_defaults`: version ≥ 4, keeps boot byte, melody, CAN, versions), so byte 0 stays `0x01`. It does not set byte 0 either: after a failed flash that would boot half an image. |
 | F2 | Fixed: `Esc::write_eeprom` writes the 192-byte struct. |
 | F3 | Fixed: every read is CRC-checked and retried (`parse_read_reply`). |
 | F4 | Fixed: `restore` writes bytes 5..192, keeps boot/version bytes, refuses another EEPROM layout version. Settings edits (`set`, `import`, interactive save) only touch bytes 5..48. |
@@ -323,10 +329,15 @@ Findings status after Phase 2:
 | F21 | Fixed: `required-features = ["std"]`. |
 
 Also changed: a failed flash now leaves the boot byte cleared (the old CLI restored
-the previous value, which could boot half an image); the CLI no longer needs tokio.
-Not handled: if a payload is lost for good, the bootloader stays in payload mode and
-takes the next frame (even a connect) as payload until it gets a well-formed payload
-of the announced size or is power-cycled.
+the previous value, which could boot half an image); the CLI no longer needs tokio
+(Phase 3 brings it back for postcard-rpc's host client).
+Payload mode after a failure (audit before merge): a lost payload ACK used to make
+the session resend the payload, which the bootloader then ran as a command; and a
+write that gave up left the bootloader in payload mode, where it ACKs the next Set
+Address as a payload (see "A command frame is a valid payload"), so the following
+read or write went to the failed write's address. `write_at` now answers a missing
+payload ACK with Set Address + Set Buffer, and ends every failed write with a Set
+Address. Only a link error mid-write can still leave payload mode set.
 
 ### Phase 3: firmware and CLI on the new core
 - [x] `esc-onewire-rp` crate, clock-derived divider.

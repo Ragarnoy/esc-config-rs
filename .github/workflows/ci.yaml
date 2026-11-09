@@ -29,7 +29,13 @@ jobs:
       - name: Clippy (no warnings)
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
-        run: cargo test
+        run: |
+          cargo test
+          cargo test -p esc-config-icd --features session
+      - name: Test relay frame buffer (host)
+        run: |
+          rustc --edition 2024 --test crates/esc-relay-fw/src/frame_buf.rs -o "$RUNNER_TEMP/frame_buf"
+          "$RUNNER_TEMP/frame_buf"
 
   no-std:
     name: no_std crates (thumbv8m)

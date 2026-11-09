@@ -111,6 +111,8 @@ pub struct FakeEsc {
     pub fail_prog_flash: u32,
     /// Fail every Prog Flash whose byte address is in this range.
     pub fail_prog_in: Option<core::ops::Range<usize>>,
+    /// Lose the next payload as if it ran into its Set Buffer frame.
+    pub merge_next_payload: bool,
 }
 
 impl FakeEsc {
@@ -161,6 +163,7 @@ impl FakeEsc {
             replies_made: 0,
             fail_prog_flash: 0,
             fail_prog_in: None,
+            merge_next_payload: false,
         }
     }
 
@@ -229,8 +232,9 @@ impl FakeEsc {
         self.frames.push(frame.to_vec());
 
         if let Some(size) = self.payload_size {
-            // receiveBuffer stops at size + 2 bytes; checkCrc reads a zero-filled
-            // buffer if fewer came.
+            // receiveBuffer zero-fills rxBuffer and stops at size + 2 bytes;
+            // decodeInput checks the CRC over `size` bytes, so a shorter frame that
+            // ends in its own CRC (any command frame) passes: zeros keep CRC 0.
             let mut rx = [0u8; 258];
             let n = frame.len().min(size + 2);
             rx[..n].copy_from_slice(&frame[..n]);
@@ -395,7 +399,8 @@ impl Link for FakeEsc {
     async fn send(&mut self, frame: &[u8]) -> Result<(), Infallible> {
         // A frame sent too soon after a Set Buffer runs into it: the bootloader
         // reads both as one frame and the payload bytes are lost.
-        let merged = self.last_was_set_buffer && self.idle < FRAME_GAP;
+        let merged = self.last_was_set_buffer
+            && (self.idle < FRAME_GAP || core::mem::take(&mut self.merge_next_payload));
         self.last_was_set_buffer = false;
         if merged {
             self.frames.push(frame.to_vec());

@@ -91,7 +91,7 @@ pub fn interactive_config(device: Option<&str>) -> Result<()> {
     // we reconnect to save.
     drop(relay);
 
-    let original_config = config.clone();
+    let mut original_config = config.clone();
 
     let (fw_major, fw_minor) = config.firmware_version();
     let esc_name = format!("AM32 v{}.{}", fw_major, fw_minor);
@@ -150,21 +150,21 @@ pub fn interactive_config(device: Option<&str>) -> Result<()> {
             MainMenuAction::RestoreConfig => {
                 if let Some(path) = prompt_restore_path()? {
                     match fs::read(&path) {
-                        Ok(data) if data.len() == 256 => {
-                            if confirm_restore()? {
-                                let mut new_raw = [0u8; 256];
-                                new_raw.copy_from_slice(&data);
-                                config = Am32Config::from_bytes(new_raw);
-                                has_unsaved_changes =
-                                    config.as_bytes() != original_config.as_bytes();
-                                println!("Configuration loaded from: {}", path);
-                            }
-                        }
+                        // Restored on the ESC right away, like the `restore`
+                        // command: settings, melody and CAN (bytes 5..192), with
+                        // the layout version check. Saving would only write 5..48.
                         Ok(data) => {
-                            println!(
-                                "Invalid backup file: expected 256 bytes, got {}",
-                                data.len()
-                            );
+                            if confirm_restore()? {
+                                match restore_and_reload(&device, &data) {
+                                    Ok(restored) => {
+                                        config = restored;
+                                        original_config = config.clone();
+                                        has_unsaved_changes = false;
+                                        println!("Configuration restored from: {path}");
+                                    }
+                                    Err(e) => println!("Restore failed: {e:#}"),
+                                }
+                            }
                         }
                         Err(e) => println!("Failed to read file: {}", e),
                     }
@@ -172,7 +172,6 @@ pub fn interactive_config(device: Option<&str>) -> Result<()> {
             }
             MainMenuAction::SaveToEsc => {
                 if has_unsaved_changes {
-                    // Reconnect to ESC (bootloader has likely timed out)
                     save_config_to_esc(&device, &config)?;
                     has_unsaved_changes = false;
                 } else {
@@ -181,7 +180,6 @@ pub fn interactive_config(device: Option<&str>) -> Result<()> {
             }
             MainMenuAction::Exit => {
                 if has_unsaved_changes && confirm_exit_with_unsaved()? {
-                    // Reconnect to ESC (bootloader has likely timed out)
                     save_config_to_esc(&device, &config)?;
                 }
                 break;
@@ -253,11 +251,14 @@ fn read_melody_from_esc(device: &str) -> Result<[u8; 128]> {
     relay.read_melody()
 }
 
-/// Save configuration to ESC by reconnecting and writing.
-///
-/// Note: We must read the config first to "prime" the connection before writing.
-/// The ESC bootloader requires a read operation before it will accept writes
-/// on a fresh connection.
+/// Restore a backup on the ESC (see [`Relay::restore`]) and read the result back.
+fn restore_and_reload(device: &str, backup: &[u8]) -> Result<Am32Config> {
+    let mut relay = Relay::connect(device)?;
+    relay.restore(backup)?;
+    relay.read_settings()
+}
+
+/// Save the edited settings (bytes 5..48) to the ESC over a new connection.
 fn save_config_to_esc(device: &str, config: &Am32Config) -> Result<()> {
     println!("Reconnecting to ESC...");
 
@@ -1211,8 +1212,8 @@ pub fn list_settings() {
 
 /// Reset ESC settings to sensible defaults.
 ///
-/// Read-modify-write: melody, CAN settings and firmware version bytes are kept,
-/// the boot byte is set to 0x01 and the EEPROM layout version raised to current.
+/// Read-modify-write: boot byte, melody, CAN settings and firmware version bytes
+/// are kept, and the EEPROM layout version is raised to current.
 pub fn reset_defaults(device: &str) -> Result<()> {
     println!("Connecting to ESC via {device}...");
 
@@ -1242,6 +1243,13 @@ pub fn reset_defaults(device: &str) -> Result<()> {
     relay.write_settings(&config)?;
 
     println!("Configuration reset to defaults!");
+    if !config.is_bootable() {
+        println!(
+            "Note: boot byte is 0x{:02X}, so the ESC stays in its bootloader \
+             (a flash did not finish). Flash the firmware again.",
+            config.boot_byte()
+        );
+    }
 
     Ok(())
 }

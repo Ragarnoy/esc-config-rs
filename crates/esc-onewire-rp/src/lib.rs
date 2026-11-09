@@ -17,7 +17,8 @@ use embassy_rp::Peri;
 use embassy_rp::gpio::{Level, Pull};
 use embassy_rp::pio::program::pio_asm;
 use embassy_rp::pio::{
-    Common, Config, Direction, Instance, Pin, PioPin, ShiftConfig, ShiftDirection, StateMachine,
+    Common, Config, Direction, FifoJoin, Instance, Pin, PioPin, ShiftConfig, ShiftDirection,
+    StateMachine,
 };
 use embassy_time::{Duration, Instant, Timer};
 use esc_session::Link;
@@ -128,6 +129,10 @@ impl<'d, P: Instance, const TX: usize, const RX: usize> OneWireUart<'d, P, TX, R
         rx_cfg.use_program(&pio.load_program(&rx_prg.program), &[]);
         rx_cfg.set_in_pins(&[&pin]);
         rx_cfg.clock_divider = divider;
+        // 8 bytes of FIFO instead of 4: `push block` stalls the SM when the FIFO is
+        // full, and a stall mid-reply desynchronises it. 8 bytes is ~4 ms of
+        // executor latency at 19200 baud.
+        rx_cfg.fifo_join = FifoJoin::RxOnly;
         rx_cfg.shift_in = ShiftConfig {
             auto_fill: false,
             // Bits enter at the MSB; after 8 the byte is in bits 31..24.

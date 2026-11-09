@@ -273,6 +273,10 @@ mod session {
 
     use super::{DeviceKind, EscError, EscInfo, LayoutInfo};
 
+    // The ICD restates these so it builds without the session; keep them in step.
+    const _: () = assert!(super::EEPROM_SIZE == esc_session::EEPROM_SIZE);
+    const _: () = assert!(super::MAX_BLOCK == esc_protocol::packet::MAX_BLOCK);
+
     fn len16(n: usize) -> u16 {
         u16::try_from(n).unwrap_or(u16::MAX)
     }

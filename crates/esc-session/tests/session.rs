@@ -160,6 +160,55 @@ fn bad_payload_is_resent() {
 }
 
 #[test]
+fn lost_payload_ack_is_not_resent_as_a_command() {
+    // The payload was taken but its ACK lost: the bootloader is out of payload
+    // mode, so resending the payload would run its bytes as a command (here 0x01,
+    // a Prog Flash with a bad CRC, answered 0xC2 on every retry).
+    let mut fake = FakeEsc::new(Mcu::F051);
+    let mut block = [0u8; EEPROM_SIZE];
+    block.copy_from_slice(&fake.flash[0x7C00..0x7C00 + EEPROM_SIZE]);
+    block[7] = 55;
+    // Replies: connect (1), devinfo (2, 3), then Set Address (4), payload (5).
+    fake.drop_reply_number = Some(5);
+    let mut esc = connect(fake);
+    block_on(esc.write_eeprom(&block)).unwrap();
+    let fake = esc.into_link();
+    assert_eq!(fake.eeprom()[7], 55);
+    assert_eq!(fake.invalid_commands, 0, "no payload byte ran as a command");
+}
+
+#[test]
+fn lost_payload_is_resent() {
+    // The payload runs into the Set Buffer frame (gap too short) and is lost. The
+    // Set Address probe is taken as a payload and ends payload mode; Set Buffer
+    // and the payload then go again.
+    let mut esc = connect(FakeEsc::new(Mcu::F051));
+    let mut block = esc_eeprom(&mut esc);
+    block[8] = 66;
+    let mut fake = esc.into_link();
+    fake.merge_next_payload = true;
+    let mut esc = connect(fake);
+    block_on(esc.write_eeprom(&block)).unwrap();
+    assert_eq!(esc.into_link().eeprom()[8], 66);
+}
+
+#[test]
+fn failed_write_leaves_payload_mode() {
+    // Every payload fails its CRC: the write gives up. Left in payload mode, the
+    // bootloader would ACK the next Set Address as a payload and the next read
+    // would come from the failed write's address instead of the EEPROM.
+    let mut fake = FakeEsc::new(Mcu::F051);
+    fake.corrupt_payloads = 4;
+    let mut esc = connect(fake);
+    assert_eq!(
+        block_on(esc.write_at(0x2000, &[0x11; 64])),
+        Err(Error::Nack(0xC2))
+    );
+    let eeprom = esc_eeprom(&mut esc);
+    assert_eq!(&eeprom[..], esc.into_link().eeprom());
+}
+
+#[test]
 fn set_buffer_needs_an_idle_gap() {
     // Without the gap the payload runs into the Set Buffer frame and is lost.
     let timing = Timing {

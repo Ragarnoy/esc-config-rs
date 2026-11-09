@@ -429,10 +429,23 @@ impl<L: Link> Esc<L> {
 
     /// Write `data` (1..=256 bytes, a multiple of 8) at a protocol address.
     ///
-    /// Set Address → Set Buffer → idle gap → payload + CRC → Prog Flash. A payload
-    /// answered with `0xC2` or not at all is resent: after a bad payload the
-    /// bootloader is still waiting for one, and would take any other frame as the
-    /// payload. The ESC programs and compares the flash before it ACKs Prog Flash.
+    /// Set Address → Set Buffer → idle gap → payload + CRC → Prog Flash. The ESC
+    /// programs and compares the flash before it ACKs Prog Flash.
+    ///
+    /// Recovery relies on a bootloader quirk: in payload mode it zero-fills a short
+    /// frame and checks the CRC over the announced length, and a whole command
+    /// frame followed by zeros has CRC 0, so any command frame is ACKed *as the
+    /// payload* (`receiveBuffer`/`decodeInput`, AM32-bootloader `main.c`). A Set
+    /// Address therefore always ends payload mode, either as itself or as a
+    /// throwaway payload, and leaves the bootloader at a known address.
+    ///
+    /// - Payload answered `0xC2`: the bootloader is still in payload mode; resend.
+    /// - Payload not answered: lost, or its ACK lost. Resending would run the
+    ///   payload bytes as a command if the ACK was lost, so send Set Address and
+    ///   Set Buffer again instead.
+    /// - Giving up: send Set Address before returning, so the next operation's
+    ///   first frame is not swallowed as a payload (its read or write would then
+    ///   go to this address).
     pub async fn write_at(&mut self, address: u16, data: &[u8]) -> Result<(), L> {
         let len = data.len();
         if !len.is_multiple_of(WRITE_ALIGN) {
@@ -446,8 +459,8 @@ impl<L: Link> Esc<L> {
         self.set_address(address).await?;
         self.link.send(&set_buffer).await?;
 
-        let mut accepted = false;
         let mut last = Error::NoReply;
+        let mut accepted = false;
         for _ in 0..=self.timing.retries {
             self.link.delay(self.timing.set_buffer_gap).await;
             self.link.send(&payload[..n]).await?;
@@ -456,13 +469,18 @@ impl<L: Link> Esc<L> {
                     accepted = true;
                     break;
                 }
-                Err(e @ (Error::Nack(BAD_CRC) | Error::NoReply | Error::ShortReply { .. })) => {
+                Err(e @ Error::Nack(BAD_CRC)) => last = e,
+                Err(e @ Error::NoReply) => {
                     last = e;
+                    self.set_address(address).await?;
+                    self.link.send(&set_buffer).await?;
                 }
                 Err(e) => return Err(e),
             }
         }
         if !accepted {
+            // Leave payload mode; the write failed either way.
+            let _ = self.set_address(address).await;
             return Err(last);
         }
 
