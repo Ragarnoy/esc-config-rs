@@ -98,6 +98,7 @@ async fn main(spawner: Spawner) {
             uart,
             connected: None,
             flashing: false,
+            flash_pending: None,
         },
         NoSpawn,
     );

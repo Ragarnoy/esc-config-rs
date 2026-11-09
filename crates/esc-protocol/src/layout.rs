@@ -80,11 +80,11 @@ impl Layout {
             return None;
         }
         let units = bytes >> self.address_shift;
-        let addr = base as u32 + units;
-        if addr > u16::MAX as u32 {
-            return None;
+        // Checked: a wrapped sum could land on a magic address (0x20 is the EEPROM).
+        match (base as u32).checked_add(units) {
+            Some(addr) if addr <= u16::MAX as u32 => Some(addr as u16),
+            _ => None,
         }
-        Some(addr as u16)
     }
 
     /// Byte offset of the application from the start of flash.
@@ -96,6 +96,14 @@ impl Layout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offset_does_not_wrap() {
+        let f051 = Layout::from_flash_code(0x1F).unwrap();
+        // 0x1000 + 0xFFFF_F020 wraps to 0x20, the EEPROM magic.
+        assert_eq!(f051.offset(0x1000, 0xFFFF_F020), None);
+        assert_eq!(f051.offset(0x1000, 0x100), Some(0x1100));
+    }
 
     #[test]
     fn flash_code_layouts() {

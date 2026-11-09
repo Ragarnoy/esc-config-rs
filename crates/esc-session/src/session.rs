@@ -243,7 +243,8 @@ impl<L: Link> Esc<L> {
         let mut done = 0;
         while done < buf.len() {
             let n = (buf.len() - done).min(MAX_BLOCK);
-            let addr = self.firmware_address(offset + done)?;
+            let at = offset.checked_add(done).ok_or(Error::BadAddress)?;
+            let addr = self.firmware_address(at)?;
             self.read_at(addr, &mut buf[done..done + n]).await?;
             done += n;
         }
@@ -292,11 +293,10 @@ impl<L: Link> Esc<L> {
             return Err(Error::BadAddress);
         }
         let max = self.max_firmware_size();
-        if offset + data.len() > max {
-            return Err(Error::ImageTooLarge {
-                size: offset + data.len(),
-                max,
-            });
+        // Checked: on a 32-bit server a request offset near usize::MAX would wrap.
+        let end = offset.checked_add(data.len()).ok_or(Error::BadAddress)?;
+        if end > max {
+            return Err(Error::ImageTooLarge { size: end, max });
         }
 
         let len = data.len().next_multiple_of(WRITE_ALIGN);

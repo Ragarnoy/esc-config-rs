@@ -33,6 +33,12 @@ pub struct Context {
     /// did every chunk since. The relay enforces the order itself, so no client
     /// can set the boot byte over a half-written app.
     pub flashing: bool,
+    /// A flash began on the ESC with this connect reply and has not finished.
+    /// Its boot byte is cleared on purpose, so `eeprom/write` refuses to set it:
+    /// a client writing back settings it read before the flash would otherwise
+    /// let the bootloader start a half-written app. Kept across reconnects of
+    /// the same ESC; cleared by a finished flash or a different ESC.
+    pub flash_pending: Option<ConnectResponse>,
 }
 
 impl Context {
@@ -47,6 +53,9 @@ impl Context {
         ))
     }
 }
+
+/// EEPROM byte 0 value that lets the bootloader start the app.
+const BOOT_ENABLED: u8 = 0x01;
 
 /// Parse a decimal version component at compile time (from Elle's `rpc_app.rs`).
 const fn version_component(s: &str) -> u8 {
@@ -92,6 +101,9 @@ async fn connect(ctx: &mut Context, _hdr: VarHeader, _req: ()) -> ConnectResp {
     let esc = Esc::connect_with(&mut ctx.uart, Timing::default()).await?;
     let info = EscInfo::of(&esc);
     let parts = (*esc.connect_reply(), *esc.layout());
+    if ctx.flash_pending.is_some_and(|r| r != parts.0) {
+        ctx.flash_pending = None;
+    }
     ctx.connected = Some(parts);
     defmt::info!("ESC connected: 0x{:04X}", info.device_id);
     Ok(info)
@@ -121,6 +133,9 @@ async fn write_eeprom(ctx: &mut Context, _hdr: VarHeader, req: Eeprom) -> AckRes
         .as_slice()
         .try_into()
         .map_err(|_| EscError::InvalidLength(req.len() as u16))?;
+    if ctx.flash_pending.is_some() && data[0] == BOOT_ENABLED {
+        return Err(EscError::FlashSequence);
+    }
     ctx.esc()?.write_eeprom(&data).await?;
     Ok(())
 }
@@ -138,7 +153,11 @@ async fn read(ctx: &mut Context, _hdr: VarHeader, req: ReadReq) -> BlockResp {
 }
 
 async fn flash_begin(ctx: &mut Context, _hdr: VarHeader, _req: ()) -> AckResp {
-    let result = ctx.esc()?.begin_flash().await;
+    let mut esc = ctx.esc()?;
+    let reply = *esc.connect_reply();
+    let result = esc.begin_flash().await;
+    // Pending even if begin failed: the boot byte may already be cleared.
+    ctx.flash_pending = Some(reply);
     ctx.flashing = result.is_ok();
     Ok(result?)
 }
@@ -161,6 +180,7 @@ async fn flash_finish(ctx: &mut Context, _hdr: VarHeader, _req: ()) -> AckResp {
     }
     ctx.esc()?.finish_flash().await?;
     ctx.flashing = false;
+    ctx.flash_pending = None;
     Ok(())
 }
 

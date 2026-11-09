@@ -798,28 +798,37 @@ fn load_image(hex_file: &str) -> Result<(Vec<u8>, u32)> {
     Ok((image, min.checked_sub(FLASH_BASE).unwrap_or(min)))
 }
 
+/// The MCU a hex file name names, if it follows the AM32 release naming
+/// (`AM32_<TARGET>_<MCU>_<version>.hex`, e.g. `AM32_F4A_4IN1_F421_2.20.hex`).
+/// `None` for any other name: a renamed file says nothing about its MCU.
+fn hex_mcu(hex_file: &str) -> Option<&str> {
+    let stem = Path::new(hex_file).file_stem()?.to_str()?;
+    if !stem.get(..5)?.eq_ignore_ascii_case("AM32_") {
+        return None;
+    }
+    stem[5..]
+        .rsplit('_')
+        .find(|part| !part.is_empty() && !part.contains('.'))
+}
+
 /// Refuse a hex file whose name names a different MCU than the ESC's firmware.
 fn check_mcu_name(relay: &mut Relay, hex_file: &str) -> Result<()> {
     match relay.read_esc_name() {
         Ok(esc_name) if !esc_name.is_empty() => {
             println!("ESC firmware: {esc_name}");
             let esc_mcu = esc_name.rsplit('_').next().unwrap_or("");
-            // HEX filenames look like "AM32_F4A_4IN1_F421_2.20": skip the version.
-            let hex_basename = Path::new(hex_file)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
-            let hex_mcu = hex_basename
-                .split('_')
-                .rev()
-                .find(|part| !part.contains('.'))
-                .unwrap_or("");
-            if !hex_mcu.is_empty() && !esc_mcu.is_empty() && !hex_mcu.eq_ignore_ascii_case(esc_mcu)
-            {
-                bail!(
-                    "MCU type mismatch: ESC has '{esc_mcu}' but firmware is for '{hex_mcu}'. \
-                     Flashing wrong firmware can brick the ESC!"
-                );
+            match hex_mcu(hex_file) {
+                Some(hex_mcu) if !esc_mcu.is_empty() && !hex_mcu.eq_ignore_ascii_case(esc_mcu) => {
+                    bail!(
+                        "MCU type mismatch: ESC has '{esc_mcu}' but firmware is for '{hex_mcu}'. \
+                         Flashing wrong firmware can brick the ESC!"
+                    );
+                }
+                Some(_) => {}
+                None => println!(
+                    "Hex file name is not AM32_<target>_<MCU>_<version>: MCU not checked \
+                     (make sure the image is for '{esc_mcu}')"
+                ),
             }
         }
         Ok(_) => println!("ESC firmware name: (empty)"),
@@ -1446,4 +1455,18 @@ pub fn melody_convert(input: &str, output: &str) -> Result<()> {
 
     println!("Wrote {} bytes to {output}", esc_protocol::MELODY_SIZE);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn hex_mcu_only_from_am32_release_names() {
+        assert_eq!(
+            super::hex_mcu("x/AM32_F4A_4IN1_F421_2.20.hex"),
+            Some("F421")
+        );
+        assert_eq!(super::hex_mcu("AM32_REF_G071.hex"), Some("G071"));
+        assert_eq!(super::hex_mcu("firmware.hex"), None);
+        assert_eq!(super::hex_mcu("latest_build.hex"), None);
+    }
 }

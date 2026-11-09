@@ -369,7 +369,7 @@ As landed:
   | `esc/disconnect` | `()` | `()` (forget the session; ESC stays in its bootloader) |
   | `esc/run` | `()` | `()` (Run frame; the app starts if byte 0 is `0x01`) |
   | `esc/eeprom/read` | `()` | 192 bytes |
-  | `esc/eeprom/write` | 192 bytes | `()` |
+  | `esc/eeprom/write` | 192 bytes | `()` (`FlashSequence` if byte 0 is `0x01` while a flash on this ESC is unfinished) |
   | `esc/name` | `()` | 32 bytes |
   | `esc/read` | `{address, len ≤ 256}` | bytes |
   | `esc/flash/begin` | `()` | `()` (boot byte cleared) |

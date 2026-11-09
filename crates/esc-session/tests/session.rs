@@ -423,6 +423,14 @@ fn chunk_bounds_and_alignment_are_checked() {
         block_on(esc.write_firmware_chunk(0, &[])),
         Err(Error::InvalidLength(0))
     );
+    // An offset that would wrap is refused before anything is sent.
+    let sent = esc.into_link().frames.len();
+    let mut esc = connect(FakeEsc::new(Mcu::F051));
+    assert_eq!(
+        block_on(esc.write_firmware_chunk(usize::MAX - 7, &[0; 16])),
+        Err(Error::BadAddress)
+    );
+    assert!(esc.into_link().frames.len() <= sent, "nothing written");
 }
 
 #[test]

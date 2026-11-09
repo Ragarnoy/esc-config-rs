@@ -189,8 +189,9 @@ pub enum EscError {
         /// Byte offset from the app start.
         offset: u32,
     },
-    /// Flash requests out of order: a chunk without `flash/begin`, or
-    /// `flash/finish` after a failed chunk (the boot byte stays cleared).
+    /// Flash requests out of order: a chunk without `flash/begin`, `flash/finish`
+    /// after a failed chunk, or an `eeprom/write` setting the boot byte while a
+    /// flash is unfinished (the boot byte stays cleared).
     FlashSequence,
 }
 
@@ -234,7 +235,7 @@ impl fmt::Display for EscError {
             }
             Self::FlashSequence => write!(
                 f,
-                "flash out of sequence: begin, then every chunk, then finish (boot byte left cleared)"
+                "flash out of sequence: begin, then every chunk, then finish; the boot byte stays cleared until a flash finishes"
             ),
         }
     }
