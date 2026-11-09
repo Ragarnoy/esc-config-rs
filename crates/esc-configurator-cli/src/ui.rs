@@ -100,7 +100,7 @@ impl SettingCategory {
     }
 
     /// Get settings in this category.
-    pub fn settings(self) -> &'static [(Setting, &'static str)] {
+    pub const fn settings(self) -> &'static [(Setting, &'static str)] {
         match self {
             Self::Motor => &[
                 (Setting::DirectionReversed, "direction"),
@@ -308,23 +308,37 @@ pub fn select_setting_in_category(
 pub fn get_setting_display_value(setting: Setting, config: &Am32Config) -> String {
     match setting {
         // Throttle/Rate settings
-        Setting::MaxRateOfChange => format!("{} (display: {:.1})", config.max_rate_of_change(), config.max_rate_of_change_display()),
-        Setting::MinDuty => format!("{} (display: {:.1}%)", config.min_duty(), config.min_duty_percent()),
+        Setting::MaxRateOfChange => format!(
+            "{} (display: {:.1})",
+            config.max_rate_of_change(),
+            config.max_rate_of_change_display()
+        ),
+        Setting::MinDuty => format!(
+            "{} (display: {:.1}%)",
+            config.min_duty(),
+            config.min_duty_percent()
+        ),
         Setting::DisableStickCalibration => on_off(config.disable_stick_calibration()),
         Setting::AbsoluteVoltage => format!("{}", config.absolute_voltage()),
-        Setting::CurrentLimitP => format!("{} (display: {})", config.current_limit_p(), config.current_limit_p_display()),
+        Setting::CurrentLimitP => format!(
+            "{} (display: {})",
+            config.current_limit_p(),
+            config.current_limit_p_display()
+        ),
         Setting::CurrentLimitI => format!("{}", config.current_limit_i()),
-        Setting::CurrentLimitD => format!("{} (display: {})", config.current_limit_d(), config.current_limit_d_display()),
+        Setting::CurrentLimitD => format!(
+            "{} (display: {})",
+            config.current_limit_d(),
+            config.current_limit_d_display()
+        ),
         Setting::ActiveBrakeStrength => format!("{}/10", config.active_brake_strength()),
         // Motor settings
-        Setting::DirectionReversed => {
-            if config.direction_reversed() {
-                "Reversed"
-            } else {
-                "Normal"
-            }
-            .to_string()
+        Setting::DirectionReversed => if config.direction_reversed() {
+            "Reversed"
+        } else {
+            "Normal"
         }
+        .to_string(),
         Setting::Bidirectional => on_off(config.bidirectional()),
         Setting::SinusoidalStartup => on_off(config.sinusoidal_startup()),
         Setting::ComplementaryPwm => on_off(config.complementary_pwm()),
@@ -341,7 +355,11 @@ pub fn get_setting_display_value(setting: Setting, config: &Am32Config) -> Strin
         Setting::Telemetry30ms => on_off(config.telemetry_30ms()),
         Setting::ServoLow => format!("{} us (raw {})", config.servo_low_us(), config.servo_low()),
         Setting::ServoHigh => {
-            format!("{} us (raw {})", config.servo_high_us(), config.servo_high())
+            format!(
+                "{} us (raw {})",
+                config.servo_high_us(),
+                config.servo_high()
+            )
         }
         Setting::ServoNeutral => format!(
             "{} us (raw {})",
@@ -360,18 +378,14 @@ pub fn get_setting_display_value(setting: Setting, config: &Am32Config) -> Strin
         Setting::DragBrakeStrength => format!("{}/10", config.drag_brake_strength()),
         Setting::RunningBrakeStrength => format!("{}/10", config.running_brake_strength()),
         Setting::AutoTiming => on_off(config.auto_timing()),
-        Setting::TemperatureLimit => {
-            match config.temperature_limit_celsius() {
-                Some(t) => format!("{}°C", t),
-                None => "Disabled".to_string(),
-            }
-        }
-        Setting::CurrentLimit => {
-            match config.current_limit_amps() {
-                Some(a) => format!("{}A", a),
-                None => "Disabled".to_string(),
-            }
-        }
+        Setting::TemperatureLimit => match config.temperature_limit_celsius() {
+            Some(t) => format!("{}°C", t),
+            None => "Disabled".to_string(),
+        },
+        Setting::CurrentLimit => match config.current_limit_amps() {
+            Some(a) => format!("{}A", a),
+            None => "Disabled".to_string(),
+        },
         Setting::SineModePower => format!("{}/10", config.sine_mode_power()),
         Setting::SignalType => format!("{}", config.signal_type()),
         Setting::ServoDeadband => format!("{}", config.servo_deadband()),
@@ -385,10 +399,13 @@ fn on_off(value: bool) -> String {
 /// Edit a boolean setting.
 pub fn edit_bool_setting(setting_name: &str, current: bool) -> Result<Option<bool>> {
     let items = ["Off", "On"];
-    let default_idx = if current { 1 } else { 0 };
+    let default_idx = usize::from(current);
 
     let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt(format!("{} (current: {})", setting_name, items[default_idx]))
+        .with_prompt(format!(
+            "{} (current: {})",
+            setting_name, items[default_idx]
+        ))
         .items(items)
         .default(default_idx)
         .interact_opt()?;
@@ -399,7 +416,7 @@ pub fn edit_bool_setting(setting_name: &str, current: bool) -> Result<Option<boo
 /// Edit a direction setting (special case for reversed).
 pub fn edit_direction_setting(current_reversed: bool) -> Result<Option<bool>> {
     let items = ["Normal", "Reversed"];
-    let default_idx = if current_reversed { 1 } else { 0 };
+    let default_idx = usize::from(current_reversed);
 
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("Motor Direction (current: {})", items[default_idx]))

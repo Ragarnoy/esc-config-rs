@@ -31,7 +31,14 @@ fn note_char_strategy() -> impl Strategy<Value = char> {
 
 /// Strategy to generate valid duration values.
 fn duration_strategy() -> impl Strategy<Value = u8> {
-    prop_oneof![Just(1u8), Just(2u8), Just(4u8), Just(8u8), Just(16u8), Just(32u8),]
+    prop_oneof![
+        Just(1u8),
+        Just(2u8),
+        Just(4u8),
+        Just(8u8),
+        Just(16u8),
+        Just(32u8),
+    ]
 }
 
 /// Strategy to generate valid octave values.

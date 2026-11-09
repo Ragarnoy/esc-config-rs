@@ -11,10 +11,9 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use esc_protocol::am32_config::{Am32Config, Setting, apply_setting};
-use esc_protocol::config::ConfigBlock;
+use esc_protocol::am32_config::{Am32Config, Am32ConfigData, Setting, apply_setting};
 use esc_protocol::device::{DeviceInfo, FirmwareType};
-use esc_protocol::ihex::{load_firmware, Firmware};
+use esc_protocol::ihex::{Firmware, load_firmware};
 
 use crate::relay::Relay;
 use crate::ui::{
@@ -26,13 +25,20 @@ use crate::ui::{
 };
 
 /// Format device info for display.
-fn format_device(info: &DeviceInfo) -> String {
+fn format_device(info: DeviceInfo) -> String {
     let firmware_name = match info.firmware {
-        Some(FirmwareType::BlheliS) => "BLHeli_S",
         Some(FirmwareType::Am32) => "AM32",
         None => "Unknown",
     };
     format!("{} (0x{:04X})", firmware_name, info.device_id)
+}
+
+/// Connect to the ESC through the relay on `device`, saying so.
+fn connect(device: &str) -> Result<Relay> {
+    println!("Connecting to ESC via {device}...");
+    let relay = Relay::connect(device)?;
+    println!("Connected: {}", format_device(relay.device()));
+    Ok(relay)
 }
 
 // =============================================================================
@@ -47,48 +53,48 @@ pub fn interactive_config(device: Option<&str>) -> Result<()> {
     let device = match device {
         Some(d) => d.to_string(),
         None => {
-            let ports = crate::relay::list_ports()?;
-            if ports.is_empty() {
-                bail!("No serial ports found. Connect the relay MCU and try again.");
-            }
-            match ui::select_port(&ports)? {
-                Some(port) => port,
-                None => {
-                    println!("No port selected. Exiting.");
-                    return Ok(());
+            let relays = crate::relay::find_relays()?;
+            if let [only] = relays.as_slice() {
+                println!("Using relay on {only}");
+                only.clone()
+            } else {
+                // None or several relays recognised: let the user pick.
+                let ports = if relays.is_empty() {
+                    crate::relay::list_ports()?
+                } else {
+                    relays
+                };
+                if ports.is_empty() {
+                    bail!("No serial ports found. Connect the relay MCU and try again.");
+                }
+                match ui::select_port(&ports)? {
+                    Some(port) => port,
+                    None => {
+                        println!("No port selected. Exiting.");
+                        return Ok(());
+                    }
                 }
             }
         }
     };
 
     // Initial connection to read config
-    println!("Connecting to ESC via {}...", device);
+    let mut relay = connect(&device)?;
 
-    let mut relay = Relay::open(&device)?;
-    relay.connect()?;
-
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
-
-    // Check if this is AM32
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Interactive config only supported for AM32 ESCs.");
+    if let Ok(name) = relay.read_esc_name()
+        && !name.is_empty()
+    {
+        println!("ESC firmware: {name}");
     }
 
     println!("Reading configuration...");
-    let config_block = relay.read_config()?;
+    let mut config = relay.read_settings()?;
 
-    // Disconnect - the bootloader will timeout anyway during menu browsing
-    // We'll reconnect when we need to save
-    relay.disconnect()?;
+    // Release the port while browsing menus; the ESC stays in its bootloader and
+    // we reconnect to save.
     drop(relay);
 
-    // Parse as AM32 config
-    let mut raw = [0u8; 256];
-    raw.copy_from_slice(config_block.as_bytes());
-    let mut config = Am32Config::from_bytes(raw);
-    let original_config = config.clone();
+    let mut original_config = config.clone();
 
     let (fw_major, fw_minor) = config.firmware_version();
     let esc_name = format!("AM32 v{}.{}", fw_major, fw_minor);
@@ -101,7 +107,7 @@ pub fn interactive_config(device: Option<&str>) -> Result<()> {
                 println!("\n{}", config);
             }
             MainMenuAction::EditSettings => {
-                if let Some(true) = edit_settings_loop(&mut config)? {
+                if edit_settings_loop(&mut config)? == Some(true) {
                     has_unsaved_changes = config.as_bytes() != original_config.as_bytes();
                 }
             }
@@ -147,21 +153,21 @@ pub fn interactive_config(device: Option<&str>) -> Result<()> {
             MainMenuAction::RestoreConfig => {
                 if let Some(path) = prompt_restore_path()? {
                     match fs::read(&path) {
-                        Ok(data) if data.len() == 256 => {
-                            if confirm_restore()? {
-                                let mut new_raw = [0u8; 256];
-                                new_raw.copy_from_slice(&data);
-                                config = Am32Config::from_bytes(new_raw);
-                                has_unsaved_changes =
-                                    config.as_bytes() != original_config.as_bytes();
-                                println!("Configuration loaded from: {}", path);
-                            }
-                        }
+                        // Restored on the ESC right away, like the `restore`
+                        // command: settings, melody and CAN (bytes 5..192), with
+                        // the layout version check. Saving would only write 5..48.
                         Ok(data) => {
-                            println!(
-                                "Invalid backup file: expected 256 bytes, got {}",
-                                data.len()
-                            );
+                            if confirm_restore()? {
+                                match restore_and_reload(&device, &data) {
+                                    Ok(restored) => {
+                                        config = restored;
+                                        original_config = config.clone();
+                                        has_unsaved_changes = false;
+                                        println!("Configuration restored from: {path}");
+                                    }
+                                    Err(e) => println!("Restore failed: {e:#}"),
+                                }
+                            }
                         }
                         Err(e) => println!("Failed to read file: {}", e),
                     }
@@ -169,7 +175,6 @@ pub fn interactive_config(device: Option<&str>) -> Result<()> {
             }
             MainMenuAction::SaveToEsc => {
                 if has_unsaved_changes {
-                    // Reconnect to ESC (bootloader has likely timed out)
                     save_config_to_esc(&device, &config)?;
                     has_unsaved_changes = false;
                 } else {
@@ -178,7 +183,6 @@ pub fn interactive_config(device: Option<&str>) -> Result<()> {
             }
             MainMenuAction::Exit => {
                 if has_unsaved_changes && confirm_exit_with_unsaved()? {
-                    // Reconnect to ESC (bootloader has likely timed out)
                     save_config_to_esc(&device, &config)?;
                 }
                 break;
@@ -201,8 +205,8 @@ fn handle_melody_menu(device: &str) -> Result<()> {
                         if data[0] == esc_protocol::MELODY_EMPTY {
                             println!("\nNo melody configured on ESC.");
                         } else if let Some(melody) = esc_protocol::Melody::from_bytes(&data) {
-                            println!("\nCurrent melody: {} notes", melody.len());
-                            println!("{}", melody);
+                            println!("\nCurrent melody: {} notes", melody.note_count());
+                            println!("{melody}");
                         } else {
                             println!("\nFailed to parse melody data.");
                         }
@@ -246,41 +250,25 @@ fn handle_melody_menu(device: &str) -> Result<()> {
 
 /// Read raw melody data from ESC (for viewing in interactive mode).
 fn read_melody_from_esc(device: &str) -> Result<[u8; 128]> {
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
-
-    let device_info = relay.session().device().expect("should be connected");
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Melody support only available for AM32 ESCs");
-    }
-
-    let data = relay.read_melody()?;
-    relay.disconnect()?;
-    Ok(data)
+    let mut relay = Relay::connect(device)?;
+    relay.read_melody()
 }
 
-/// Save configuration to ESC by reconnecting and writing.
-///
-/// Note: We must read the config first to "prime" the connection before writing.
-/// The ESC bootloader requires a read operation before it will accept writes
-/// on a fresh connection.
+/// Restore a backup on the ESC (see [`Relay::restore`]) and read the result back.
+fn restore_and_reload(device: &str, backup: &[u8]) -> Result<Am32Config> {
+    let mut relay = Relay::connect(device)?;
+    relay.restore(backup)?;
+    relay.read_settings()
+}
+
+/// Save the edited settings (bytes 5..48) to the ESC over a new connection.
 fn save_config_to_esc(device: &str, config: &Am32Config) -> Result<()> {
     println!("Reconnecting to ESC...");
 
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
-
-    // Read current config first - this primes the connection for writing.
-    // Without this read, the ESC will NACK the write command.
-    println!("Preparing for write...");
-    let _ = relay.read_config()?;
+    let mut relay = Relay::connect(device)?;
 
     println!("Writing configuration...");
-    let config_block = ConfigBlock::from_array(*config.as_bytes());
-    relay.write_config(&config_block)?;
-
-    relay.disconnect()?;
+    relay.update_settings(config)?;
     println!("Configuration saved successfully!");
 
     Ok(())
@@ -292,16 +280,14 @@ fn edit_settings_loop(config: &mut Am32Config) -> Result<Option<bool>> {
 
     loop {
         // Select category
-        let category = match select_category()? {
-            Some(c) => c,
-            None => return Ok(Some(modified)),
+        let Some(category) = select_category()? else {
+            return Ok(Some(modified));
         };
 
         // Select setting in category
         loop {
-            let (setting, name) = match select_setting_in_category(category, config)? {
-                Some(s) => s,
-                None => break, // Back to category selection
+            let Some((setting, name)) = select_setting_in_category(category, config)? else {
+                break; // Back to category selection
             };
 
             // Edit the setting
@@ -319,56 +305,88 @@ fn edit_single_setting(config: &mut Am32Config, setting: Setting, name: &str) ->
         Setting::MaxRateOfChange => {
             if let Some(value) = edit_u8_setting(name, config.max_rate_of_change(), 1, 200)? {
                 config.set_max_rate_of_change(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::MinDuty => {
             if let Some(value) = edit_u8_setting(name, config.min_duty(), 0, 50)? {
                 config.set_min_duty(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::DisableStickCalibration => {
             if let Some(value) = edit_bool_setting(name, config.disable_stick_calibration())? {
                 config.set_disable_stick_calibration(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::AbsoluteVoltage => {
             if let Some(value) = edit_u8_setting(name, config.absolute_voltage(), 0, 255)? {
                 config.set_absolute_voltage(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::CurrentLimitP => {
             if let Some(value) = edit_u8_setting(name, config.current_limit_p(), 0, 255)? {
                 config.set_current_limit_p(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::CurrentLimitI => {
             if let Some(value) = edit_u8_setting(name, config.current_limit_i(), 0, 255)? {
                 config.set_current_limit_i(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::CurrentLimitD => {
             if let Some(value) = edit_u8_setting(name, config.current_limit_d(), 0, 255)? {
                 config.set_current_limit_d(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::ActiveBrakeStrength => {
             if let Some(value) = edit_u8_setting(name, config.active_brake_strength(), 1, 10)? {
                 config.set_active_brake_strength(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
@@ -376,217 +394,341 @@ fn edit_single_setting(config: &mut Am32Config, setting: Setting, name: &str) ->
         Setting::DirectionReversed => {
             if let Some(value) = edit_direction_setting(config.direction_reversed())? {
                 config.set_direction_reversed(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::Bidirectional => {
             if let Some(value) = edit_bool_setting(name, config.bidirectional())? {
                 config.set_bidirectional(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::SinusoidalStartup => {
             if let Some(value) = edit_bool_setting(name, config.sinusoidal_startup())? {
                 config.set_sinusoidal_startup(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::ComplementaryPwm => {
             if let Some(value) = edit_bool_setting(name, config.complementary_pwm())? {
                 config.set_complementary_pwm(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::VariablePwm => {
             if let Some(value) = edit_bool_setting(name, config.variable_pwm())? {
                 config.set_variable_pwm(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::StuckRotorProtection => {
             if let Some(value) = edit_bool_setting(name, config.stuck_rotor_protection())? {
                 config.set_stuck_rotor_protection(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::TimingAdvance => {
             if let Some(value) = edit_timing_setting(config.timing_advance())? {
                 config.set_timing_advance(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::PwmFrequency => {
             if let Some(value) = edit_u8_setting(name, config.pwm_frequency_khz(), 16, 96)? {
                 config.set_pwm_frequency_khz(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::StartupPower => {
             if let Some(value) = edit_u8_setting(name, config.startup_power(), 50, 150)? {
                 config.set_startup_power(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::MotorKv => {
             if let Some(value) = edit_motor_kv_setting(config.motor_kv())? {
                 config.set_motor_kv(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::MotorPoles => {
             if let Some(value) = edit_u8_setting(name, config.motor_poles(), 2, 36)? {
                 config.set_motor_poles(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::BrakeOnStop => {
             if let Some(value) = edit_bool_setting(name, config.brake_on_stop())? {
                 config.set_brake_on_stop(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::StallProtection => {
             if let Some(value) = edit_bool_setting(name, config.stall_protection())? {
                 config.set_stall_protection(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::BeepVolume => {
             if let Some(value) = edit_u8_setting(name, config.beep_volume(), 0, 11)? {
                 config.set_beep_volume(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::Telemetry30ms => {
             if let Some(value) = edit_bool_setting(name, config.telemetry_30ms())? {
                 config.set_telemetry_30ms(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::ServoLow => {
             if let Some(value) = edit_u8_setting(name, config.servo_low(), 0, 255)? {
                 config.set_servo_low(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::ServoHigh => {
             if let Some(value) = edit_u8_setting(name, config.servo_high(), 0, 255)? {
                 config.set_servo_high(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::ServoNeutral => {
             if let Some(value) = edit_u8_setting(name, config.servo_neutral(), 0, 255)? {
                 config.set_servo_neutral(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::LowVoltageCutoff => {
             if let Some(value) = edit_bool_setting(name, config.low_voltage_cutoff())? {
                 config.set_low_voltage_cutoff(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::LvcThreshold => {
             if let Some(value) = edit_u8_setting(name, config.lvc_threshold(), 0, 255)? {
                 config.set_lvc_threshold(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::RcCarReversing => {
             if let Some(value) = edit_bool_setting(name, config.rc_car_reversing())? {
                 config.set_rc_car_reversing(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::UseHallSensors => {
             if let Some(value) = edit_bool_setting(name, config.use_hall_sensors())? {
                 config.set_use_hall_sensors(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::SineModeRange => {
             if let Some(value) = edit_u8_setting(name, config.sine_mode_range(), 5, 25)? {
                 config.set_sine_mode_range(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::DragBrakeStrength => {
             if let Some(value) = edit_u8_setting(name, config.drag_brake_strength(), 1, 10)? {
                 config.set_drag_brake_strength(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::RunningBrakeStrength => {
             if let Some(value) = edit_u8_setting(name, config.running_brake_strength(), 1, 10)? {
                 config.set_running_brake_strength(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::AutoTiming => {
             if let Some(value) = edit_bool_setting(name, config.auto_timing())? {
                 config.set_auto_timing(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::TemperatureLimit => {
             if let Some(value) = edit_u8_setting(name, config.temperature_limit(), 70, 142)? {
                 config.set_temperature_limit(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::CurrentLimit => {
             if let Some(value) = edit_u8_setting(name, config.current_limit(), 0, 255)? {
                 config.set_current_limit(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::SineModePower => {
             if let Some(value) = edit_u8_setting(name, config.sine_mode_power(), 1, 10)? {
                 config.set_sine_mode_power(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::SignalType => {
             if let Some(value) = edit_u8_setting(name, config.signal_type() as u8, 0, 2)? {
                 config.set_signal_type(esc_protocol::SignalType::from_byte(value));
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
         Setting::ServoDeadband => {
             if let Some(value) = edit_u8_setting(name, config.servo_deadband(), 0, 255)? {
                 config.set_servo_deadband(value);
-                println!("Set {} = {}", name, get_setting_display_value(setting, config));
+                println!(
+                    "Set {} = {}",
+                    name,
+                    get_setting_display_value(setting, config)
+                );
                 return Ok(true);
             }
         }
@@ -598,294 +740,258 @@ fn edit_single_setting(config: &mut Am32Config, setting: Setting, name: &str) ->
 // Original Commands
 // =============================================================================
 
-/// Read configuration from ESC and display info.
+/// Read the ESC's identity, layout and EEPROM and display them.
 pub fn read_config(device: &str, output: Option<&str>) -> Result<()> {
-    println!("Connecting to ESC via {device}...");
+    let mut relay = connect(device)?;
 
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
-
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
-
-    println!("Reading configuration...");
-    let config = relay.read_config()?;
-
-    // Display config as hex dump
-    println!("\nConfiguration block (256 bytes, encrypted):");
-    print_hex_dump(config.as_bytes());
-
-    // Save to file if requested
-    if let Some(path) = output {
-        fs::write(path, config.as_bytes())
-            .with_context(|| format!("failed to write config to {path}"))?;
-        println!("\nConfig saved to: {path}");
+    let layout = relay.layout();
+    println!("  Pin code:          0x{:02X}", relay.info().pin_code);
+    println!("  Flash code:        0x{:02X}", relay.info().flash_code);
+    println!("  Bootloader proto:  {}", relay.info().protocol_version);
+    println!(
+        "  Layout (protocol units, shift {}): app 0x{:04X}, name 0x{:04X}, EEPROM 0x{:04X}",
+        layout.address_shift, layout.firmware_start, layout.filename_start, layout.eeprom_start
+    );
+    if let Ok(name) = relay.read_esc_name() {
+        println!(
+            "  Firmware name:     {}",
+            if name.is_empty() { "(empty)" } else { &name }
+        );
     }
 
-    // Read device ID block
-    println!("\nReading device ID...");
-    let device_id = relay.read_device_id()?;
-    println!("Device ID block:");
-    print_hex_line(&device_id);
+    println!("Reading EEPROM...");
+    let eeprom = relay.read_eeprom_256()?;
+    println!("\nEEPROM (256 bytes at the EEPROM base; AM32 uses the first 192):");
+    print_hex_dump(&eeprom);
 
-    // Disconnect cleanly
-    relay.disconnect()?;
-    println!("\nDisconnected.");
+    if let Some(path) = output {
+        fs::write(path, eeprom).with_context(|| format!("failed to write EEPROM to {path}"))?;
+        println!("\nEEPROM saved to: {path}");
+    }
 
     Ok(())
+}
+
+/// Address of the start of flash in AM32 hex files.
+const FLASH_BASE: u32 = 0x0800_0000;
+
+/// Load a hex file as an app image: (image bytes, its app offset in bytes).
+fn load_image(hex_file: &str) -> Result<(Vec<u8>, u32)> {
+    if !Path::new(hex_file).exists() {
+        bail!("hex file not found: {hex_file}");
+    }
+    println!("Loading firmware from {hex_file}...");
+    let content =
+        fs::read_to_string(hex_file).with_context(|| format!("failed to read {hex_file}"))?;
+    let firmware =
+        load_firmware(&content).with_context(|| format!("failed to parse {hex_file}"))?;
+    let min = firmware
+        .min_address()
+        .context("hex file contains no data")?;
+    let image = firmware.to_binary();
+    println!(
+        "Firmware size: {} bytes ({:.1} KB), at 0x{:08X}",
+        image.len(),
+        image.len() as f64 / 1024.0,
+        min
+    );
+    Ok((image, min.checked_sub(FLASH_BASE).unwrap_or(min)))
+}
+
+/// The MCU a hex file name names, if it follows the AM32 release naming
+/// (`AM32_<TARGET>_<MCU>_<version>.hex`, e.g. `AM32_F4A_4IN1_F421_2.20.hex`).
+/// `None` for any other name: a renamed file says nothing about its MCU.
+fn hex_mcu(hex_file: &str) -> Option<&str> {
+    let stem = Path::new(hex_file).file_stem()?.to_str()?;
+    if !stem.get(..5)?.eq_ignore_ascii_case("AM32_") {
+        return None;
+    }
+    stem[5..]
+        .rsplit('_')
+        .find(|part| !part.is_empty() && !part.contains('.'))
+}
+
+/// Refuse a hex file whose name names a different MCU than the ESC's firmware.
+fn check_mcu_name(relay: &mut Relay, hex_file: &str) -> Result<()> {
+    match relay.read_esc_name() {
+        Ok(esc_name) if !esc_name.is_empty() => {
+            println!("ESC firmware: {esc_name}");
+            let esc_mcu = esc_name.rsplit('_').next().unwrap_or("");
+            match hex_mcu(hex_file) {
+                Some(hex_mcu) if !esc_mcu.is_empty() && !hex_mcu.eq_ignore_ascii_case(esc_mcu) => {
+                    bail!(
+                        "MCU type mismatch: ESC has '{esc_mcu}' but firmware is for '{hex_mcu}'. \
+                         Flashing wrong firmware can brick the ESC!"
+                    );
+                }
+                Some(_) => {}
+                None => println!(
+                    "Hex file name is not AM32_<target>_<MCU>_<version>: MCU not checked \
+                     (make sure the image is for '{esc_mcu}')"
+                ),
+            }
+        }
+        Ok(_) => println!("ESC firmware name: (empty)"),
+        Err(e) => println!("Could not read ESC name: {e}"),
+    }
+    Ok(())
+}
+
+fn byte_progress_bar(len: usize) -> indicatif::ProgressBar {
+    use indicatif::{ProgressBar, ProgressStyle};
+
+    let pb = ProgressBar::new(len as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+            .expect("valid template")
+            .progress_chars("#>-"),
+    );
+    pb
 }
 
 /// Flash firmware hex file to ESC.
 ///
-/// # Safety
-/// This function handles the boot byte (safety bit) to prevent bricking:
-/// 1. Clears boot byte before flash (ESC won't boot corrupted firmware)
-/// 2. Restores boot byte after successful flash
-/// 3. Attempts to restore boot byte even on failure
+/// `esc-session` clears the boot byte first and sets it only after every chunk is
+/// written and read back, so a failed flash leaves the ESC in its bootloader,
+/// ready for another attempt.
 pub fn flash_firmware(device: &str, hex_file: &str) -> Result<()> {
-    use indicatif::{ProgressBar, ProgressStyle};
+    let (image, offset) = load_image(hex_file)?;
 
-    // Validate file exists
-    if !Path::new(hex_file).exists() {
-        bail!("hex file not found: {hex_file}");
-    }
+    let mut relay = connect(device)?;
 
-    // Load and parse firmware
-    println!("Loading firmware from {hex_file}...");
-    let content = fs::read_to_string(hex_file)
-        .with_context(|| format!("failed to read {hex_file}"))?;
-    let firmware = load_firmware(&content)
-        .with_context(|| format!("failed to parse {hex_file}"))?;
-    let binary = firmware.to_binary();
+    check_mcu_name(&mut relay, hex_file)?;
 
-    println!("Firmware size: {} bytes ({:.1} KB)", binary.len(), binary.len() as f64 / 1024.0);
-    if let Some(min) = firmware.min_address() {
-        println!("Address range: 0x{:08X} - 0x{:08X}", min, firmware.max_address().unwrap_or(min));
-    }
-
-    // Connect to ESC
-    println!("\nConnecting to ESC via {device}...");
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
-
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
-
-    // Check if this is AM32
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Firmware flashing only supported for AM32 ESCs");
-    }
-
-    // Step 1: Clear boot byte (SAFETY)
-    println!("\nPreparing ESC for flash...");
-    let mut eeprom = relay.read_eeprom()?;
-    let original_boot_byte = eeprom[0];
-    println!("  Boot byte: 0x{:02X}", original_boot_byte);
-
-    eeprom[0] = 0x00; // Clear boot byte - ESC won't boot if flash fails
-    relay.write_eeprom(&eeprom)?;
-    println!("  Boot byte cleared (safety mode)");
-
-    // Step 2: Flash firmware in 128-byte chunks
-    let chunk_size = 128usize;
-    let total_chunks = (binary.len() + chunk_size - 1) / chunk_size;
-    let max_retries = 8;
-    let firmware_start: u16 = 0x1000; // AM32 firmware starts at 4KB (after bootloader)
-
-    let pb = ProgressBar::new(total_chunks as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} chunks ({eta})")
-            .unwrap()
-            .progress_chars("#>-"),
+    println!(
+        "\nFlashing {} bytes (boot byte cleared until done)...",
+        image.len()
     );
-
-    println!("\nFlashing {} chunks to 0x{:04X}...", total_chunks, firmware_start);
-
-    for chunk_idx in 0..total_chunks {
-        let start = chunk_idx * chunk_size;
-        let end = (start + chunk_size).min(binary.len());
-        let chunk = &binary[start..end];
-        let address = firmware_start + (chunk_idx * chunk_size) as u16;
-
-        // Retry loop
-        let mut retries = 0;
-        loop {
-            match relay.write_chunk(address, chunk) {
-                Ok(()) => break,
-                Err(e) if retries < max_retries => {
-                    retries += 1;
-                    pb.println(format!(
-                        "  Retry {}/{} at 0x{:04X}: {}",
-                        retries, max_retries, address, e
-                    ));
-                }
-                Err(e) => {
-                    // CRITICAL: Try to restore boot byte before failing
-                    pb.finish_with_message("FAILED");
-                    println!("\n  Attempting to restore boot byte...");
-                    eeprom[0] = original_boot_byte;
-                    if relay.write_eeprom(&eeprom).is_ok() {
-                        println!("  Boot byte restored");
-                    } else {
-                        println!("  WARNING: Could not restore boot byte!");
-                    }
-                    relay.disconnect().ok();
-                    bail!("Flash failed at 0x{:04X} after {} retries: {}", address, retries, e);
-                }
-            }
+    let pb = byte_progress_bar(image.len());
+    let result = relay.flash_firmware(&image, offset, |done, _| pb.set_position(done as u64));
+    match result {
+        Ok(()) => pb.finish_with_message("done"),
+        Err(e) => {
+            pb.abandon();
+            return Err(e.context(
+                "the ESC stays in its bootloader (boot byte cleared); flash again to recover",
+            ));
         }
-        pb.inc(1);
     }
-    pb.finish_with_message("done");
 
-    // Step 3: Restore boot byte
-    println!("\nFinalizing...");
-    eeprom[0] = 0x01; // Enable boot
-    relay.write_eeprom(&eeprom)?;
-    println!("  Boot byte restored (0x01)");
-
-    // Step 4: Disconnect
-    relay.disconnect()?;
-
-    println!("\nFirmware flashed successfully!");
-    println!("The ESC will restart with the new firmware.");
-
+    println!("\nFirmware flashed and verified.");
+    println!(
+        "The ESC is still in its bootloader: run `esc-configurator run -d {device}` or \
+         power-cycle it without the relay attached."
+    );
     Ok(())
 }
 
 /// Verify ESC firmware against hex file.
-///
-/// Reads the firmware from the ESC and compares it against the hex file.
 pub fn verify_firmware(device: &str, hex_file: &str) -> Result<()> {
-    use indicatif::{ProgressBar, ProgressStyle};
+    let (image, offset) = load_image(hex_file)?;
 
-    if !Path::new(hex_file).exists() {
-        bail!("hex file not found: {hex_file}");
-    }
+    let mut relay = connect(device)?;
 
-    // Load firmware from hex file
-    println!("Loading firmware from {hex_file}...");
-    let content = fs::read_to_string(hex_file)
-        .with_context(|| format!("failed to read {hex_file}"))?;
-    let firmware = load_firmware(&content)
-        .with_context(|| format!("failed to parse {hex_file}"))?;
-    let binary = firmware.to_binary();
-
-    println!("Firmware size: {} bytes ({:.1} KB)", binary.len(), binary.len() as f64 / 1024.0);
-
-    // Connect to ESC
-    println!("\nConnecting to ESC via {device}...");
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
-
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
-
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Firmware verification only supported for AM32 ESCs");
-    }
-
-    // Verify in 256-byte chunks (more efficient reads)
-    let chunk_size = 256usize;
-    let total_chunks = (binary.len() + chunk_size - 1) / chunk_size;
-    let firmware_start: u16 = 0x1000; // AM32 firmware starts at 4KB
-
-    let pb = ProgressBar::new(total_chunks as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} chunks")
-            .unwrap()
-            .progress_chars("#>-"),
-    );
-
-    println!("\nVerifying {} chunks...", total_chunks);
-
-    let mut mismatches = 0;
-    for chunk_idx in 0..total_chunks {
-        let start = chunk_idx * chunk_size;
-        let end = (start + chunk_size).min(binary.len());
-        let expected = &binary[start..end];
-        let address = firmware_start + (chunk_idx * chunk_size) as u16;
-
-        let actual = relay.read_flash(address, expected.len())?;
-
-        if actual != expected {
-            mismatches += 1;
-            pb.println(format!(
-                "  Mismatch at 0x{:04X}: expected {:02X?}..., got {:02X?}...",
-                address,
-                &expected[..8.min(expected.len())],
-                &actual[..8.min(actual.len())]
-            ));
-        }
-        pb.inc(1);
-    }
-
+    println!("\nVerifying {} bytes...", image.len());
+    let pb = byte_progress_bar(image.len());
+    let result = relay.verify_firmware(&image, offset, |done, _| pb.set_position(done as u64));
     pb.finish();
-    relay.disconnect()?;
-
-    if mismatches > 0 {
-        bail!("Verification FAILED: {} chunk(s) did not match", mismatches);
-    }
+    result?;
 
     println!("\nFirmware verified successfully!");
     Ok(())
 }
 
-/// Backup ESC configuration to file.
-pub fn backup_config(device: &str, output: &str) -> Result<()> {
-    println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
+/// Leave the bootloader and start the ESC firmware.
+pub fn run_firmware(device: &str) -> Result<()> {
+    let mut relay = connect(device)?;
 
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
+    let config = relay.read_settings()?;
+    if !config.is_bootable() {
+        bail!(
+            "EEPROM boot byte is 0x{:02X}, not 0x01: the bootloader would not start the \
+             firmware. Flash or restore first.",
+            config.boot_byte()
+        );
+    }
+    relay.run()?;
+    println!("Run sent; the ESC firmware is starting.");
+    Ok(())
+}
+
+/// Backup ESC configuration to file (256 bytes at the EEPROM base).
+pub fn backup_config(device: &str, output: &str) -> Result<()> {
+    let mut relay = connect(device)?;
 
     println!("Reading configuration...");
-    let config = relay.read_config()?;
+    let eeprom = relay.read_eeprom_256()?;
 
-    fs::write(output, config.as_bytes())
-        .with_context(|| format!("failed to write backup to {output}"))?;
+    fs::write(output, eeprom).with_context(|| format!("failed to write backup to {output}"))?;
 
     println!("Backup saved to: {output}");
-
-    relay.disconnect()?;
-    println!("Disconnected.");
 
     Ok(())
 }
 
 /// Restore ESC configuration from file.
+///
+/// Restores settings, melody and CAN settings (bytes 5..192). The ESC's boot byte
+/// and version bytes are kept, and a backup with a different EEPROM layout
+/// version is refused.
 pub fn restore_config(device: &str, input: &str) -> Result<()> {
     if !Path::new(input).exists() {
         bail!("backup file not found: {input}");
     }
-
     let data = fs::read(input).with_context(|| format!("failed to read {input}"))?;
 
-    if data.len() != 256 {
-        bail!("invalid backup file: expected 256 bytes, got {}", data.len());
-    }
-
-    let config = ConfigBlock::from_bytes(&data);
-
-    println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
-
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
+    let mut relay = connect(device)?;
 
     println!("Writing configuration...");
-    relay.write_config(&config)?;
+    relay.restore(&data)?;
 
     println!("Configuration restored from: {input}");
 
-    relay.disconnect()?;
-    println!("Disconnected.");
+    Ok(())
+}
+
+/// Export ESC configuration as TOML (AM32 only).
+pub fn export_config(device: &str, output: &str) -> Result<()> {
+    let mut relay = connect(device)?;
+
+    println!("Reading configuration...");
+    let config = relay.read_settings()?;
+    let data = Am32ConfigData::from(&config);
+
+    let toml_string =
+        toml::to_string_pretty(&data).context("failed to serialize config to TOML")?;
+
+    fs::write(output, &toml_string).with_context(|| format!("failed to write TOML to {output}"))?;
+
+    println!("Configuration exported to: {output}");
+
+    Ok(())
+}
+
+/// Import ESC configuration from TOML file (AM32 only).
+pub fn import_config(device: &str, input: &str) -> Result<()> {
+    if !Path::new(input).exists() {
+        bail!("TOML file not found: {input}");
+    }
+
+    let toml_string =
+        fs::read_to_string(input).with_context(|| format!("failed to read {input}"))?;
+
+    let data: Am32ConfigData = toml::from_str(&toml_string)
+        .with_context(|| format!("failed to parse TOML from {input}"))?;
+
+    let config = Am32Config::from(&data);
+
+    let mut relay = connect(device)?;
+
+    println!("Writing settings (melody, CAN and version bytes are kept)...");
+    relay.update_settings(&config)?;
+
+    println!("Configuration imported from: {input}");
 
     Ok(())
 }
@@ -912,11 +1018,11 @@ pub fn hex_info(hex_file: &str) -> Result<()> {
         bail!("hex file not found: {hex_file}");
     }
 
-    let content = fs::read_to_string(hex_file)
-        .with_context(|| format!("failed to read {hex_file}"))?;
+    let content =
+        fs::read_to_string(hex_file).with_context(|| format!("failed to read {hex_file}"))?;
 
-    let firmware = load_firmware(&content)
-        .with_context(|| format!("failed to parse {hex_file}"))?;
+    let firmware =
+        load_firmware(&content).with_context(|| format!("failed to parse {hex_file}"))?;
 
     println!("Intel HEX file: {hex_file}");
     println!();
@@ -928,13 +1034,15 @@ pub fn hex_info(hex_file: &str) -> Result<()> {
 /// Print detailed firmware information.
 fn print_firmware_info(firmware: &Firmware) {
     println!("Segments: {}", firmware.segments.len());
-    println!("Total size: {} bytes ({:.1} KB)",
+    println!(
+        "Total size: {} bytes ({:.1} KB)",
         firmware.total_size(),
         firmware.total_size() as f64 / 1024.0
     );
 
     if let Some(min) = firmware.min_address() {
-        println!("Address range: 0x{:08X} - 0x{:08X}",
+        println!(
+            "Address range: 0x{:08X} - 0x{:08X}",
             min,
             firmware.max_address().unwrap_or(min)
         );
@@ -947,7 +1055,8 @@ fn print_firmware_info(firmware: &Firmware) {
     println!();
     println!("Segment details:");
     for (i, segment) in firmware.segments.iter().enumerate() {
-        println!("  [{i}] 0x{:08X} - 0x{:08X} ({} bytes)",
+        println!(
+            "  [{i}] 0x{:08X} - 0x{:08X} ({} bytes)",
             segment.start_address,
             segment.end_address(),
             segment.data.len()
@@ -969,34 +1078,14 @@ fn print_firmware_info(firmware: &Firmware) {
 
 /// Show parsed ESC configuration (human-readable).
 pub fn show_config(device: &str) -> Result<()> {
-    println!("Connecting to ESC via {device}...");
-
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
-
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
-
-    // Check if this is AM32
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Config parsing only supported for AM32 ESCs. Use 'read' for raw dump.");
-    }
+    let mut relay = connect(device)?;
 
     println!("Reading configuration...");
-    let config_block = relay.read_config()?;
-
-    // Parse as AM32 config
-    let mut raw = [0u8; 256];
-    raw.copy_from_slice(config_block.as_bytes());
-    let config = Am32Config::from_bytes(raw);
+    let config = relay.read_settings()?;
 
     // Display parsed config
     println!();
     println!("{config}");
-
-    relay.disconnect()?;
-    println!("Disconnected.");
 
     Ok(())
 }
@@ -1009,28 +1098,11 @@ pub fn set_config(device: &str, setting_name: &str, value: &str) -> Result<()> {
             "Unknown setting: {setting_name}\nRun 'esc-configurator settings' to see available options."
         ))?;
 
-    println!("Connecting to ESC via {device}...");
-
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
-
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
-
-    // Check if this is AM32
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Config modification only supported for AM32 ESCs.");
-    }
+    let mut relay = connect(device)?;
 
     // Read current config
     println!("Reading current configuration...");
-    let config_block = relay.read_config()?;
-
-    // Parse as AM32 config
-    let mut raw = [0u8; 256];
-    raw.copy_from_slice(config_block.as_bytes());
-    let mut config = Am32Config::from_bytes(raw);
+    let mut config = relay.read_settings()?;
 
     // Apply the setting change
     apply_setting(&mut config, setting, value)
@@ -1038,15 +1110,10 @@ pub fn set_config(device: &str, setting_name: &str, value: &str) -> Result<()> {
 
     println!("Setting {setting_name} = {value}");
 
-    // Write back
-    let new_config = ConfigBlock::from_array(*config.as_bytes());
     println!("Writing configuration...");
-    relay.write_config(&new_config)?;
+    relay.write_settings(&config)?;
 
     println!("Configuration updated successfully!");
-
-    relay.disconnect()?;
-    println!("Disconnected.");
 
     Ok(())
 }
@@ -1082,6 +1149,7 @@ pub fn list_settings() {
         ("servo-neutral", Setting::ServoNeutral),
         ("rc-car", Setting::RcCarReversing),
         ("hall", Setting::UseHallSensors),
+        ("signal", Setting::SignalType),
         ("sine-range", Setting::SineModeRange),
     ];
 
@@ -1094,6 +1162,45 @@ pub fn list_settings() {
     println!("  esc-configurator set -d /dev/ttyACM0 -s motor-kv -v 2200");
     println!("  esc-configurator set -d /dev/ttyACM0 -s direction -v on");
     println!("  esc-configurator set -d /dev/ttyACM0 -s timing -v 2");
+}
+
+/// Reset ESC settings to sensible defaults.
+///
+/// Read-modify-write: boot byte, melody, CAN settings and firmware version bytes
+/// are kept, and the EEPROM layout version is raised to current.
+pub fn reset_defaults(device: &str) -> Result<()> {
+    let mut relay = connect(device)?;
+
+    let mut config = relay.read_settings()?;
+    config.apply_defaults();
+
+    // Show what we're about to write
+    println!();
+    println!("Default configuration:");
+    println!("  Signal Type:       Auto (accepts DShot)");
+    println!("  PWM Frequency:     24 kHz");
+    println!("  Motor Timing:      22.5° (Auto)");
+    println!("  Motor KV:          2000");
+    println!("  Motor Poles:       14");
+    println!("  Startup Power:     100%");
+    println!("  Beep Volume:       5");
+    println!("  Stuck Rotor Prot:  On");
+    println!("  Stall Protection:  On");
+    println!();
+
+    println!("Writing default configuration...");
+    relay.write_settings(&config)?;
+
+    println!("Configuration reset to defaults!");
+    if !config.is_bootable() {
+        println!(
+            "Note: boot byte is 0x{:02X}, so the ESC stays in its bootloader \
+             (a flash did not finish). Flash the firmware again.",
+            config.boot_byte()
+        );
+    }
+
+    Ok(())
 }
 
 // ----------------------------------------------------------------------------
@@ -1124,36 +1231,16 @@ fn print_hex_dump(data: &[u8]) {
     }
 }
 
-/// Print a single line of hex bytes.
-fn print_hex_line(data: &[u8]) {
-    for byte in data {
-        print!("{byte:02X} ");
-    }
-    println!();
-}
-
 // =============================================================================
 // Melody Commands
 // =============================================================================
 
 /// Download melody from ESC to file.
 pub fn melody_download(device: &str, output: &str) -> Result<()> {
-    println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
-
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
-
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Melody support only available for AM32 ESCs");
-    }
+    let mut relay = connect(device)?;
 
     println!("Reading melody data...");
     let data = relay.read_melody()?;
-
-    relay.disconnect()?;
 
     // Check if melody exists
     if data[0] == esc_protocol::MELODY_EMPTY {
@@ -1161,7 +1248,7 @@ pub fn melody_download(device: &str, output: &str) -> Result<()> {
     } else {
         // Parse and display melody info
         if let Some(melody) = esc_protocol::Melody::from_bytes(&data) {
-            println!("Melody: {} notes", melody.len());
+            println!("Melody: {} notes", melody.note_count());
             println!("  {melody}");
         }
     }
@@ -1195,7 +1282,7 @@ pub fn melody_upload(device: &str, input: &str) -> Result<()> {
         let melody = esc_protocol::Melody::from_rtttl(text)
             .map_err(|e| anyhow::anyhow!("failed to parse RTTTL: {:?}", e))?;
 
-        println!("Uploading melody: {} notes", melody.len());
+        println!("Uploading melody: {} notes", melody.note_count());
         println!("  {melody}");
 
         melody.to_bytes()
@@ -1212,7 +1299,7 @@ pub fn melody_upload(device: &str, input: &str) -> Result<()> {
         if data[0] == esc_protocol::MELODY_EMPTY {
             println!("Warning: file contains empty melody (will clear ESC melody)");
         } else if let Some(melody) = esc_protocol::Melody::from_bytes(&data) {
-            println!("Uploading melody: {} notes", melody.len());
+            println!("Uploading melody: {} notes", melody.note_count());
             println!("  {melody}");
         }
 
@@ -1221,22 +1308,10 @@ pub fn melody_upload(device: &str, input: &str) -> Result<()> {
         buf
     };
 
-    println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
-
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
-
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Melody support only available for AM32 ESCs");
-    }
+    let mut relay = connect(device)?;
 
     println!("Writing melody data...");
     relay.write_melody(&melody_data)?;
-
-    relay.disconnect()?;
     println!("Melody uploaded successfully!");
 
     Ok(())
@@ -1244,23 +1319,11 @@ pub fn melody_upload(device: &str, input: &str) -> Result<()> {
 
 /// Clear melody from ESC.
 pub fn melody_clear(device: &str) -> Result<()> {
-    println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::open(device)?;
-    relay.connect()?;
-
-    let device_info = relay.session().device().expect("should be connected");
-    println!("Connected: {}", format_device(device_info));
-
-    if device_info.firmware != Some(FirmwareType::Am32) {
-        relay.disconnect()?;
-        bail!("Melody support only available for AM32 ESCs");
-    }
+    let mut relay = connect(device)?;
 
     println!("Clearing melody...");
     let empty = esc_protocol::Melody::clear_bytes();
     relay.write_melody(&empty)?;
-
-    relay.disconnect()?;
     println!("Melody cleared!");
 
     Ok(())
@@ -1274,7 +1337,9 @@ fn is_rtttl_format(data: &[u8]) -> bool {
         let text = text.trim();
         // Must have at least 2 colons and be mostly printable ASCII
         let colon_count = text.chars().filter(|&c| c == ':').count();
-        let is_printable = text.chars().all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace());
+        let is_printable = text
+            .chars()
+            .all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace());
         colon_count >= 2 && is_printable && text.len() > 5
     } else {
         false
@@ -1308,7 +1373,8 @@ pub fn melody_info(file: &str) -> Result<()> {
 
         match esc_protocol::Melody::from_rtttl(text) {
             Ok(melody) => {
-                println!("Notes: {}", melody.len());
+                println!("Notes: {}", melody.note_count());
+                println!("Entries: {} (count, freq_index) pairs", melody.len());
                 println!();
                 println!("Melody: {melody}");
                 println!();
@@ -1323,7 +1389,7 @@ pub fn melody_info(file: &str) -> Result<()> {
     }
 
     // Binary format
-    println!("Format: Binary");
+    println!("Format: Binary (Bluejay)");
 
     if data[0] == esc_protocol::MELODY_EMPTY {
         println!("Status: No melody (first byte is 0xFF)");
@@ -1331,7 +1397,9 @@ pub fn melody_info(file: &str) -> Result<()> {
     }
 
     if let Some(melody) = esc_protocol::Melody::from_bytes(&data) {
-        println!("Notes: {}", melody.len());
+        println!("BPM: {}", melody.bpm());
+        println!("Notes: {}", melody.note_count());
+        println!("Entries: {} (count, freq_index) pairs", melody.len());
         println!();
         println!("Melody: {melody}");
         println!();
@@ -1344,18 +1412,21 @@ pub fn melody_info(file: &str) -> Result<()> {
     Ok(())
 }
 
-/// Print detailed note breakdown.
+/// Print detailed entry breakdown.
 fn print_melody_details(melody: &esc_protocol::Melody) {
-    println!("Note details:");
-    for (i, note) in melody.notes().iter().enumerate() {
-        println!(
-            "  [{:2}] {:<4} octave {} {:>7} (0x{:02X})",
-            i,
-            note.note.name(),
-            note.real_octave(),
-            note.duration.name(),
-            note.to_byte()
-        );
+    println!("Entry details:");
+    for (i, entry) in melody.entries().iter().enumerate() {
+        if entry.is_pause() {
+            println!("  [{:2}] PAUSE  {}ms", i, entry.count);
+        } else {
+            println!(
+                "  [{:2}] count={:3}  freq_idx={:3}  (~{:.1} Hz)",
+                i,
+                entry.count,
+                entry.freq_index,
+                entry.frequency()
+            );
+        }
     }
 }
 
@@ -1377,11 +1448,25 @@ pub fn melody_convert(input: &str, output: &str) -> Result<()> {
     if let Some(name) = esc_protocol::Melody::rtttl_name(text) {
         println!("Converting: {name}");
     }
-    println!("Notes: {}", melody.len());
+    println!("Notes: {}", melody.note_count());
 
     let bytes = melody.to_bytes();
     fs::write(output, bytes).with_context(|| format!("failed to write {output}"))?;
 
     println!("Wrote {} bytes to {output}", esc_protocol::MELODY_SIZE);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn hex_mcu_only_from_am32_release_names() {
+        assert_eq!(
+            super::hex_mcu("x/AM32_F4A_4IN1_F421_2.20.hex"),
+            Some("F421")
+        );
+        assert_eq!(super::hex_mcu("AM32_REF_G071.hex"), Some("G071"));
+        assert_eq!(super::hex_mcu("firmware.hex"), None);
+        assert_eq!(super::hex_mcu("latest_build.hex"), None);
+    }
 }

@@ -1,0 +1,12 @@
+[package]
+name = "esc-session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AM32 bootloader session: connect, read, write, flash over any half-duplex link (no_std, async)"
+
+[dependencies]
+esc-protocol = { path = "../esc-protocol" }
+
+[dev-dependencies]
+embassy-futures.workspace = true

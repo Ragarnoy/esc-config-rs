@@ -1,0 +1,21 @@
+[package]
+name = "esc-onewire-rp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "RP2040/RP235x PIO half-duplex one-wire UART for AM32 bootloaders, as an esc-session Link"
+
+[features]
+default = []
+# Chip selection is forwarded to embassy-rp; the binary picks exactly one.
+rp2040 = ["embassy-rp/rp2040"]
+rp235xa = ["embassy-rp/rp235xa"]
+rp235xb = ["embassy-rp/rp235xb"]
+defmt = ["embassy-rp/defmt"]
+
+[dependencies]
+embassy-rp.workspace = true
+embassy-time.workspace = true
+embassy-futures.workspace = true
+esc-session = { path = "../esc-session" }
+fixed = "1.31"

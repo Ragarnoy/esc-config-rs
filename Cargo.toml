@@ -2,9 +2,10 @@
 resolver = "2"
 members = [
     "crates/esc-protocol",
-    "crates/esc-dshot",
+    "crates/esc-session",
+    "crates/esc-config-icd",
     "crates/esc-configurator-cli",
-    "crates/esc-relay-core",
+    "crates/esc-onewire-rp",
     "crates/esc-relay-fw",
     "crates/rtttl-rs",
 ]
@@ -13,9 +14,9 @@ members = [
 # Build it explicitly with: cargo build -p esc-relay-fw --target thumbv8m.main-none-eabihf
 default-members = [
     "crates/esc-protocol",
-    "crates/esc-dshot",
+    "crates/esc-session",
+    "crates/esc-config-icd",
     "crates/esc-configurator-cli",
-    "crates/esc-relay-core",
     "crates/rtttl-rs",
 ]
 
@@ -26,12 +27,32 @@ license = "MIT"
 repository = "https://github.com/ragarnoy/esc-config-rs"
 
 [workspace.dependencies]
-thiserror = { version = "2.0", default-features = false }
-tokio = { version = "1", features = ["full"] }
-clap = { version = "4", features = ["derive"] }
-anyhow = "1.0"
-serialport = "4.8"
-dialoguer = "0.12"
+clap = { version = "4.6.7", features = ["derive"] }
+anyhow = "1.0.104"
+serialport = "4.10.1"
+dialoguer = "0.12.0"
+toml = "1.0"
+# postcard-rpc stack, same versions as Elle
+postcard = { version = "1.1", default-features = false }
+postcard-rpc = { version = "0.12", default-features = false }
+postcard-schema = { version = "0.2", default-features = false, features = ["derive", "heapless-v0_9"] }
+heapless = { version = "0.9", features = ["serde"] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+cobs = { version = "0.5", default-features = false }
+embassy-rp = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-time-driver = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-usb = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+
+[patch.crates-io]
+embassy-rp = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-time-driver = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
+embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy.git", rev = "340bf1de" }
 
 [profile.release]
 debug = 2

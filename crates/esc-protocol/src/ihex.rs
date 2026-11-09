@@ -107,17 +107,17 @@ impl RecordData {
     }
 
     /// Get the number of data bytes.
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.len
     }
 
     /// Check if empty.
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
 
     /// Push a byte. Returns false if full.
-    fn push(&mut self, byte: u8) -> bool {
+    const fn push(&mut self, byte: u8) -> bool {
         if self.len < MAX_RECORD_DATA {
             self.data[self.len] = byte;
             self.len += 1;
@@ -173,7 +173,10 @@ impl fmt::Display for ParseError {
             Self::TooShort => write!(f, "record too short"),
             Self::InvalidHex => write!(f, "invalid hexadecimal character"),
             Self::ChecksumMismatch { expected, actual } => {
-                write!(f, "checksum mismatch: expected 0x{expected:02X}, got 0x{actual:02X}")
+                write!(
+                    f,
+                    "checksum mismatch: expected 0x{expected:02X}, got 0x{actual:02X}"
+                )
             }
             Self::UnknownRecordType(t) => write!(f, "unknown record type: 0x{t:02X}"),
             Self::ByteCountMismatch { expected, actual } => {
@@ -249,8 +252,8 @@ pub fn parse_record(line: &str) -> Result<Record, ParseError> {
     let address = u16::from_be_bytes([addr_high, addr_low]);
     let record_type_byte = parse_hex_byte(&hex[6..8]).ok_or(ParseError::InvalidHex)?;
 
-    let record_type =
-        RecordType::from_byte(record_type_byte).ok_or(ParseError::UnknownRecordType(record_type_byte))?;
+    let record_type = RecordType::from_byte(record_type_byte)
+        .ok_or(ParseError::UnknownRecordType(record_type_byte))?;
 
     // Check we have enough hex chars for data + checksum
     let expected_hex_len = 8 + (byte_count * 2) + 2;
@@ -312,7 +315,10 @@ impl Record {
         if self.data.len() != 2 {
             return None;
         }
-        Some(u16::from_be_bytes([self.data.as_slice()[0], self.data.as_slice()[1]]))
+        Some(u16::from_be_bytes([
+            self.data.as_slice()[0],
+            self.data.as_slice()[1],
+        ]))
     }
 
     /// For ExtendedSegmentAddress records, get the segment address.
@@ -325,7 +331,10 @@ impl Record {
         if self.data.len() != 2 {
             return None;
         }
-        Some(u16::from_be_bytes([self.data.as_slice()[0], self.data.as_slice()[1]]))
+        Some(u16::from_be_bytes([
+            self.data.as_slice()[0],
+            self.data.as_slice()[1],
+        ]))
     }
 
     /// For StartLinearAddress records, get the 32-bit entry point.
@@ -371,12 +380,12 @@ mod std_ext {
 
     impl Segment {
         /// End address (exclusive) of this segment.
-        pub fn end_address(&self) -> u32 {
+        pub const fn end_address(&self) -> u32 {
             self.start_address + self.data.len() as u32
         }
 
         /// Check if an address falls within this segment.
-        pub fn contains(&self, address: u32) -> bool {
+        pub const fn contains(&self, address: u32) -> bool {
             address >= self.start_address && address < self.end_address()
         }
     }
@@ -445,7 +454,10 @@ mod std_ext {
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum LoadError {
         /// Error parsing a specific line.
-        Parse { line_number: usize, error: ParseError },
+        Parse {
+            line_number: usize,
+            error: ParseError,
+        },
         /// File ended without EOF record.
         MissingEof,
         /// Multiple EOF records found.
@@ -719,9 +731,9 @@ mod tests {
         // :02 0000 00 AABB -> sum = 2+0+0+0+0xAA+0xBB = 0x167, checksum = 0x99
         // :02 0010 00 CCDD -> sum = 2+0+0x10+0+0xCC+0xDD = 0x1BB, checksum = 0x45
         let hex = concat!(
-            ":020000040000FA\n",      // Base 0x00000000
-            ":02000000AABB99\n",      // 2 bytes at 0x0000
-            ":02001000CCDD45\n",      // 2 bytes at 0x0010 (gap!)
+            ":020000040000FA\n", // Base 0x00000000
+            ":02000000AABB99\n", // 2 bytes at 0x0000
+            ":02001000CCDD45\n", // 2 bytes at 0x0010 (gap!)
             ":00000001FF\n"
         );
         let firmware = load_firmware(hex).unwrap();
@@ -737,8 +749,8 @@ mod tests {
     fn load_firmware_extended_address() {
         // :02 0000 00 AABB -> checksum = 0x99
         let hex = concat!(
-            ":020000040001F9\n",      // Base 0x00010000
-            ":02000000AABB99\n",      // 2 bytes at 0x00010000
+            ":020000040001F9\n", // Base 0x00010000
+            ":02000000AABB99\n", // 2 bytes at 0x00010000
             ":00000001FF\n"
         );
         let firmware = load_firmware(hex).unwrap();
@@ -751,7 +763,7 @@ mod tests {
         let hex = concat!(
             ":020000040000FA\n",
             ":04000000AABBCCDDEE\n",
-            ":0400000500001000E7\n",  // Entry point 0x00001000
+            ":0400000500001000E7\n", // Entry point 0x00001000
             ":00000001FF\n"
         );
         let firmware = load_firmware(hex).unwrap();
@@ -793,9 +805,9 @@ mod tests {
     fn firmware_to_binary_with_gap() {
         // Two segments with a gap between them
         let hex = concat!(
-            ":020000040000FA\n",      // Base 0x00000000
-            ":02000000AABB99\n",      // 2 bytes at 0x0000
-            ":02001000CCDD45\n",      // 2 bytes at 0x0010 (gap!)
+            ":020000040000FA\n", // Base 0x00000000
+            ":02000000AABB99\n", // 2 bytes at 0x0000
+            ":02001000CCDD45\n", // 2 bytes at 0x0010 (gap!)
             ":00000001FF\n"
         );
         let firmware = load_firmware(hex).unwrap();
@@ -919,12 +931,20 @@ mod tests {
 
         // When we have 256 bytes, we send 0
         let data_256 = [0u8; 256];
-        let encoded = if data_256.len() == 256 { 0u8 } else { data_256.len() as u8 };
+        let encoded = if data_256.len() == 256 {
+            0u8
+        } else {
+            data_256.len() as u8
+        };
         assert_eq!(encoded, size_256);
 
         // When we have 128 bytes, we send 128
         let data_128 = [0u8; 128];
-        let encoded = if data_128.len() == 256 { 0u8 } else { data_128.len() as u8 };
+        let encoded = if data_128.len() == 256 {
+            0u8
+        } else {
+            data_128.len() as u8
+        };
         assert_eq!(encoded, size_128);
     }
 }

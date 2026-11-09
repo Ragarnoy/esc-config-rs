@@ -25,7 +25,7 @@ Complete reference for the 48-byte AM32 configuration block.
 │ 0x0B   │ current_limit_d            │ u8    │ D gain, display ×2          │
 │ 0x0C   │ active_brake_strength      │ u8    │ 1-10                        │
 ├────────┼────────────────────────────┼───────┼─────────────────────────────┤
-│ 0x0D   │ (reserved)                 │ -     │                             │
+│ 0x0D   │ brake_on_zero_throttle     │ u8    │ Not exposed by the CLI yet  │
 │ 0x0E   │ (reserved)                 │ -     │                             │
 │ 0x0F   │ (reserved)                 │ -     │                             │
 │ 0x10   │ (reserved)                 │ -     │                             │

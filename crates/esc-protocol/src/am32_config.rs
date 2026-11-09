@@ -27,7 +27,7 @@ pub enum MotorTiming {
 }
 
 impl MotorTiming {
-    pub fn from_byte(b: u8) -> Self {
+    pub const fn from_byte(b: u8) -> Self {
         match b {
             0 => Self::Deg0,
             1 => Self::Deg7_5,
@@ -37,7 +37,7 @@ impl MotorTiming {
         }
     }
 
-    pub fn degrees(self) -> f32 {
+    pub const fn degrees(self) -> f32 {
         match self {
             Self::Deg0 => 0.0,
             Self::Deg7_5 => 7.5,
@@ -69,7 +69,7 @@ pub enum VariablePwmMode {
 }
 
 impl VariablePwmMode {
-    pub fn from_byte(b: u8) -> Self {
+    pub const fn from_byte(b: u8) -> Self {
         match b {
             0 => Self::Fixed,
             1 => Self::Variable,
@@ -103,7 +103,7 @@ pub enum BrakeMode {
 }
 
 impl BrakeMode {
-    pub fn from_byte(b: u8) -> Self {
+    pub const fn from_byte(b: u8) -> Self {
         match b {
             0 => Self::Off,
             1 => Self::Brake,
@@ -122,7 +122,8 @@ impl fmt::Display for BrakeMode {
     }
 }
 
-/// Signal input type (offset 0x2E)
+/// Signal input type (offset 0x2E / 46)
+/// Maps to AM32 inputType enum
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
@@ -130,18 +131,28 @@ pub enum SignalType {
     /// Auto-detect signal type
     #[default]
     Auto = 0,
-    /// DShot digital protocol
+    /// DShot digital protocol (unidirectional)
     DShot = 1,
     /// Servo/PWM analog signal
     Servo = 2,
+    /// Serial protocol
+    Serial = 3,
+    /// Extended DShot Telemetry with arming (bidirectional)
+    EdtArm = 4,
+    /// DroneCAN protocol
+    DroneCan = 5,
 }
 
 impl SignalType {
-    pub fn from_byte(b: u8) -> Self {
+    pub const fn from_byte(b: u8) -> Self {
         match b {
             0 => Self::Auto,
             1 => Self::DShot,
-            _ => Self::Servo,
+            2 => Self::Servo,
+            3 => Self::Serial,
+            4 => Self::EdtArm,
+            5 => Self::DroneCan,
+            _ => Self::Auto,
         }
     }
 }
@@ -152,39 +163,45 @@ impl fmt::Display for SignalType {
             Self::Auto => write!(f, "Auto"),
             Self::DShot => write!(f, "DShot"),
             Self::Servo => write!(f, "Servo/PWM"),
+            Self::Serial => write!(f, "Serial"),
+            Self::EdtArm => write!(f, "EDT+Arm (Bidirectional)"),
+            Self::DroneCan => write!(f, "DroneCAN"),
         }
     }
 }
 
-// EEPROM byte offsets based on C++ ESC Config Tool reference
+// EEPROM byte offsets for AM32 v2.20+
+// Based on EEprom_t union from AM32 firmware
 mod offsets {
-    // Read-only info (0x00-0x04)
-    pub const BOOT_BYTE: usize = 0x00;
+    // Header (0x00-0x04)
+    pub const RESERVED_0: usize = 0x00; // Boot byte: the bootloader jumps only if 0x01
     pub const EEPROM_VERSION: usize = 0x01;
-    pub const BOOTLOADER_VERSION: usize = 0x02;
+    pub const RESERVED_1: usize = 0x02; // Was bootloader_version in older versions
     pub const FIRMWARE_MAJOR: usize = 0x03;
     pub const FIRMWARE_MINOR: usize = 0x04;
 
     // Throttle/Rate settings (0x05-0x0C)
-    pub const MAX_RATE_OF_CHANGE: usize = 0x05;
-    pub const MIN_DUTY: usize = 0x06;
+    pub const MAX_RATE_OF_CHANGE: usize = 0x05; // max_ramp: 0.1% to 25% per ms
+    pub const MIN_DUTY: usize = 0x06; // minimum_duty_cycle: 0.2% to 51%
     pub const DISABLE_STICK_CALIBRATION: usize = 0x07;
-    pub const ABSOLUTE_VOLTAGE: usize = 0x08;
-    pub const CURRENT_LIMIT_P: usize = 0x09;
-    pub const CURRENT_LIMIT_I: usize = 0x0A;
-    pub const CURRENT_LIMIT_D: usize = 0x0B;
-    pub const ACTIVE_BRAKE_STRENGTH: usize = 0x0C;
+    pub const ABSOLUTE_VOLTAGE: usize = 0x08; // absolute_voltage_cutoff: 1-100 in 0.5V
+    pub const CURRENT_LIMIT_P: usize = 0x09; // current_P: 0-255
+    pub const CURRENT_LIMIT_I: usize = 0x0A; // current_I: 0-255
+    pub const CURRENT_LIMIT_D: usize = 0x0B; // current_D: 0-255
+    pub const ACTIVE_BRAKE_STRENGTH: usize = 0x0C; // active_brake_power: 1-5%
+    #[allow(dead_code)]
+    pub const BRAKE_ON_ZERO_THROTTLE: usize = 0x0D; // brake_on_zero_throttle (not exposed yet)
 
-    // Reserved (0x0D-0x10)
+    // Reserved (0x0E-0x10)
 
     // Motor settings (0x11-0x1B)
-    pub const DIRECTION_REVERSED: usize = 0x11;
-    pub const BIDIRECTIONAL: usize = 0x12;
-    pub const SINUSOIDAL_STARTUP: usize = 0x13;
-    pub const COMPLEMENTARY_PWM: usize = 0x14;
-    pub const VARIABLE_PWM: usize = 0x15;
+    pub const DIRECTION_REVERSED: usize = 0x11; // dir_reversed
+    pub const BIDIRECTIONAL: usize = 0x12; // bi_direction
+    pub const SINUSOIDAL_STARTUP: usize = 0x13; // use_sine_start
+    pub const COMPLEMENTARY_PWM: usize = 0x14; // comp_pwm
+    pub const VARIABLE_PWM: usize = 0x15; // variable_pwm
     pub const STUCK_ROTOR_PROTECTION: usize = 0x16;
-    pub const TIMING_ADVANCE: usize = 0x17;
+    pub const TIMING_ADVANCE: usize = 0x17; // advance_level
     pub const PWM_FREQUENCY: usize = 0x18;
     pub const STARTUP_POWER: usize = 0x19;
     pub const MOTOR_KV: usize = 0x1A;
@@ -196,37 +213,67 @@ mod offsets {
 
     // Audio and telemetry (0x1E-0x1F)
     pub const BEEP_VOLUME: usize = 0x1E;
-    pub const TELEMETRY_30MS: usize = 0x1F;
+    pub const TELEMETRY_ON_INTERVAL: usize = 0x1F; // telemetry_on_interval
 
     // Servo/PWM input (0x20-0x23)
-    pub const SERVO_LOW: usize = 0x20;
-    pub const SERVO_HIGH: usize = 0x21;
-    pub const SERVO_NEUTRAL: usize = 0x22;
-    pub const SERVO_DEADBAND: usize = 0x23;
+    pub const SERVO_LOW: usize = 0x20; // servo.low_threshold
+    pub const SERVO_HIGH: usize = 0x21; // servo.high_threshold
+    pub const SERVO_NEUTRAL: usize = 0x22; // servo.neutral
+    pub const SERVO_DEADBAND: usize = 0x23; // servo.dead_band
 
     // Low voltage cutoff (0x24-0x25)
     pub const LOW_VOLTAGE_CUTOFF: usize = 0x24;
-    pub const LVC_THRESHOLD: usize = 0x25;
+    pub const LVC_THRESHOLD: usize = 0x25; // low_cell_volt_cutoff
 
     // Input modes (0x26-0x27)
-    pub const RC_CAR_REVERSING: usize = 0x26;
+    pub const RC_CAR_REVERSING: usize = 0x26; // rc_car_reverse
     pub const USE_HALL_SENSORS: usize = 0x27;
 
     // Sine mode (0x28)
-    pub const SINE_MODE_RANGE: usize = 0x28;
+    pub const SINE_MODE_RANGE: usize = 0x28; // sine_mode_changeover_thottle_level
 
     // Brake strengths (0x29-0x2A)
     pub const DRAG_BRAKE_STRENGTH: usize = 0x29;
-    pub const RUNNING_BRAKE_STRENGTH: usize = 0x2A;
+    pub const RUNNING_BRAKE_STRENGTH: usize = 0x2A; // driving_brake_strength
 
     // Limits (0x2B-0x2C)
-    pub const TEMPERATURE_LIMIT: usize = 0x2B;
-    pub const CURRENT_LIMIT: usize = 0x2C;
+    pub const TEMPERATURE_LIMIT: usize = 0x2B; // limits.temperature
+    pub const CURRENT_LIMIT: usize = 0x2C; // limits.current
 
     // Additional settings (0x2D-0x2F)
     pub const SINE_MODE_POWER: usize = 0x2D;
-    pub const SIGNAL_TYPE: usize = 0x2E;
-    pub const AUTO_TIMING: usize = 0x2F;
+    pub const INPUT_TYPE: usize = 0x2E; // input_type (was signal_type)
+    pub const AUTO_TIMING: usize = 0x2F; // auto_advance
+
+    // Tune/Melody (0x30-0xAF) - 128 bytes
+    #[allow(dead_code)]
+    pub const TUNE_START: usize = 0x30;
+    #[allow(dead_code)]
+    pub const TUNE_END: usize = 0xAF;
+
+    // CAN settings (0xB0-0xBF)
+    #[allow(dead_code)]
+    pub const CAN_NODE: usize = 0xB0;
+    #[allow(dead_code)]
+    pub const CAN_ESC_INDEX: usize = 0xB1;
+    #[allow(dead_code)]
+    pub const CAN_REQUIRE_ARMING: usize = 0xB2;
+    #[allow(dead_code)]
+    pub const CAN_TELEM_RATE: usize = 0xB3;
+    #[allow(dead_code)]
+    pub const CAN_REQUIRE_ZERO_THROTTLE: usize = 0xB4;
+    #[allow(dead_code)]
+    pub const CAN_FILTER_HZ: usize = 0xB5;
+    #[allow(dead_code)]
+    pub const CAN_DEBUG_RATE: usize = 0xB6;
+    #[allow(dead_code)]
+    pub const CAN_TERM_ENABLE: usize = 0xB7;
+
+    // Legacy aliases for backwards compatibility
+    pub const BOOT_BYTE: usize = RESERVED_0;
+    pub const BOOTLOADER_VERSION: usize = RESERVED_1;
+    pub const SIGNAL_TYPE: usize = INPUT_TYPE;
+    pub const TELEMETRY_30MS: usize = TELEMETRY_ON_INTERVAL;
 }
 
 impl Am32Config {
@@ -235,18 +282,116 @@ impl Am32Config {
         Self { raw }
     }
 
+    /// EEPROM layout version written by current AM32 firmware (`EEPROM_VERSION`).
+    ///
+    /// Firmware treats a lower version as an old layout and overwrites bytes 5-11
+    /// with its own defaults on the next boot.
+    pub const CURRENT_EEPROM_VERSION: u8 = 4;
+
+    /// Create a config block holding only default values.
+    ///
+    /// Melody and CAN bytes are erased (0xFF) and the firmware version bytes are
+    /// zero, so the firmware rewrites them on its next boot. Prefer reading the
+    /// ESC's block and calling [`Self::apply_defaults`], which keeps them.
+    pub fn with_defaults() -> Self {
+        let mut config = Self::from_bytes([0xFF; 256]);
+        config.raw[offsets::FIRMWARE_MAJOR] = 0;
+        config.raw[offsets::FIRMWARE_MINOR] = 0;
+        config.raw[offsets::RESERVED_1] = 0;
+        for b in &mut config.raw[0x0E..=0x10] {
+            *b = 0;
+        }
+        config.raw[offsets::BRAKE_ON_ZERO_THROTTLE] = 0;
+        config.set_boot_byte(Self::BOOT_BYTE_ENABLED);
+        config.apply_defaults();
+        config
+    }
+
+    /// Reset every setting to its default, keeping the boot byte, melody, CAN and
+    /// version bytes.
+    ///
+    /// Raises the EEPROM version to [`Self::CURRENT_EEPROM_VERSION`] if it is lower,
+    /// so the firmware keeps these values instead of replacing them. The boot byte
+    /// is not a setting: it is `0x00` after a failed flash on purpose, and setting
+    /// it would let the bootloader start a half-written app.
+    pub fn apply_defaults(&mut self) {
+        let config = self;
+        if config.raw[offsets::EEPROM_VERSION] < Self::CURRENT_EEPROM_VERSION
+            || config.raw[offsets::EEPROM_VERSION] == 0xFF
+        {
+            config.raw[offsets::EEPROM_VERSION] = Self::CURRENT_EEPROM_VERSION;
+        }
+
+        // Throttle/Rate settings
+        config.set_max_rate_of_change(100); // 10.0 display
+        config.set_min_duty(10); // 5% display
+        config.set_disable_stick_calibration(false);
+        config.set_absolute_voltage(0);
+        config.set_current_limit_p(50);
+        config.set_current_limit_i(50);
+        config.set_current_limit_d(50);
+        config.set_active_brake_strength(5);
+
+        // Motor settings
+        config.set_direction_reversed(false);
+        config.set_bidirectional(false);
+        config.set_sinusoidal_startup(false);
+        config.set_complementary_pwm(false);
+        config.set_variable_pwm_mode(VariablePwmMode::Fixed);
+        config.set_stuck_rotor_protection(true);
+        config.set_timing_advance(MotorTiming::Deg22_5);
+        config.set_auto_timing(true);
+        config.set_pwm_frequency_khz(24);
+        config.set_startup_power(100);
+        config.set_motor_kv(2000);
+        config.set_motor_poles(14);
+
+        // Brake settings
+        config.set_brake_mode(BrakeMode::Off);
+        config.set_stall_protection(true);
+        config.set_drag_brake_strength(1);
+        config.set_running_brake_strength(1);
+
+        // Audio/telemetry
+        config.set_beep_volume(5);
+        config.set_telemetry_30ms(false);
+
+        // Servo input - these are only used in Servo mode
+        config.set_servo_low(125); // 1000µs
+        config.set_servo_high(125); // 2000µs
+        config.set_servo_neutral(126); // 1500µs
+        config.set_servo_deadband(50);
+
+        // Signal type - CRITICAL: Auto to accept DShot
+        config.set_signal_type(SignalType::Auto);
+
+        // Limits
+        config.set_low_voltage_cutoff(false);
+        config.set_lvc_threshold(100); // 3.5V
+        config.set_temperature_limit(142); // Disabled
+        config.set_current_limit(101); // Disabled
+
+        // Input modes
+        config.set_rc_car_reversing(false);
+        config.set_use_hall_sensors(false);
+
+        // Sine mode
+        config.set_sine_mode_range(5);
+        config.set_sine_mode_power(5);
+    }
+
     /// Get raw bytes.
     pub const fn as_bytes(&self) -> &[u8; 256] {
         &self.raw
     }
 
     /// Get mutable raw bytes.
-    pub fn as_bytes_mut(&mut self) -> &mut [u8; 256] {
+    pub const fn as_bytes_mut(&mut self) -> &mut [u8; 256] {
         &mut self.raw
     }
 
     // =========================================================================
-    // Safety Bit Handling
+    // Boot byte (`esc_session::Esc::begin_flash` / `finish_flash` own it)
     // =========================================================================
 
     /// Boot byte value that enables ESC booting.
@@ -256,17 +401,17 @@ impl Am32Config {
     pub const BOOT_BYTE_DISABLED: u8 = 0x00;
 
     /// ESC boot byte (must be 1 for ESC to boot).
-    pub fn boot_byte(&self) -> u8 {
+    pub const fn boot_byte(&self) -> u8 {
         self.raw[offsets::BOOT_BYTE]
     }
 
     /// Set the boot byte to a specific value.
-    pub fn set_boot_byte(&mut self, value: u8) {
+    pub const fn set_boot_byte(&mut self, value: u8) {
         self.raw[offsets::BOOT_BYTE] = value;
     }
 
     /// Check if the ESC is bootable (boot byte == 0x01).
-    pub fn is_bootable(&self) -> bool {
+    pub const fn is_bootable(&self) -> bool {
         self.boot_byte() == Self::BOOT_BYTE_ENABLED
     }
 
@@ -274,7 +419,7 @@ impl Am32Config {
     ///
     /// Returns a `BootStatus` enum indicating whether the ESC is bootable,
     /// stuck in bootloader, or has an unexpected boot byte value.
-    pub fn boot_status(&self) -> BootStatus {
+    pub const fn boot_status(&self) -> BootStatus {
         match self.boot_byte() {
             Self::BOOT_BYTE_ENABLED => BootStatus::Bootable,
             Self::BOOT_BYTE_DISABLED => BootStatus::StuckInBootloader,
@@ -282,30 +427,7 @@ impl Am32Config {
         }
     }
 
-    /// Clear the boot byte (set to 0x00) to prevent booting.
-    ///
-    /// **SAFETY:** Call this before flashing firmware to ensure the ESC
-    /// won't try to boot corrupted firmware if the flash fails.
-    ///
-    /// Returns the previous boot byte value for restoration.
-    pub fn clear_boot_byte(&mut self) -> u8 {
-        let previous = self.boot_byte();
-        self.raw[offsets::BOOT_BYTE] = Self::BOOT_BYTE_DISABLED;
-        previous
-    }
-
-    /// Restore the boot byte (set to 0x01) to enable booting.
-    ///
-    /// **SAFETY:** Call this after successful firmware flash to allow
-    /// the ESC to boot.
-    pub fn restore_boot_byte(&mut self) {
-        self.raw[offsets::BOOT_BYTE] = Self::BOOT_BYTE_ENABLED;
-    }
-
-    /// Get the first 48 bytes of the EEPROM (the configurable region).
-    ///
-    /// This is the region that contains the boot byte and all config settings.
-    /// Used for safety bit handling during firmware flashing.
+    /// Get the first 48 bytes of the EEPROM (boot byte, versions and settings).
     pub fn eeprom_bytes(&self) -> &[u8] {
         &self.raw[0..48]
     }
@@ -320,17 +442,17 @@ impl Am32Config {
     // =========================================================================
 
     /// EEPROM format version.
-    pub fn eeprom_version(&self) -> u8 {
+    pub const fn eeprom_version(&self) -> u8 {
         self.raw[offsets::EEPROM_VERSION]
     }
 
     /// Bootloader version.
-    pub fn bootloader_version(&self) -> u8 {
+    pub const fn bootloader_version(&self) -> u8 {
         self.raw[offsets::BOOTLOADER_VERSION]
     }
 
     /// Firmware version as (major, minor).
-    pub fn firmware_version(&self) -> (u8, u8) {
+    pub const fn firmware_version(&self) -> (u8, u8) {
         (
             self.raw[offsets::FIRMWARE_MAJOR],
             self.raw[offsets::FIRMWARE_MINOR],
@@ -342,7 +464,7 @@ impl Am32Config {
     // =========================================================================
 
     /// Max rate of change (1-200, display value = raw / 10.0).
-    pub fn max_rate_of_change(&self) -> u8 {
+    pub const fn max_rate_of_change(&self) -> u8 {
         self.raw[offsets::MAX_RATE_OF_CHANGE]
     }
 
@@ -356,7 +478,7 @@ impl Am32Config {
     }
 
     /// Min duty cycle (0-50, display value = raw / 2.0 %).
-    pub fn min_duty(&self) -> u8 {
+    pub const fn min_duty(&self) -> u8 {
         self.raw[offsets::MIN_DUTY]
     }
 
@@ -370,60 +492,60 @@ impl Am32Config {
     }
 
     /// Disable stick calibration (true = disabled).
-    pub fn disable_stick_calibration(&self) -> bool {
+    pub const fn disable_stick_calibration(&self) -> bool {
         self.raw[offsets::DISABLE_STICK_CALIBRATION] != 0
     }
 
-    pub fn set_disable_stick_calibration(&mut self, value: bool) {
+    pub const fn set_disable_stick_calibration(&mut self, value: bool) {
         self.raw[offsets::DISABLE_STICK_CALIBRATION] = value as u8;
     }
 
     /// Absolute voltage reading (raw ADC value).
-    pub fn absolute_voltage(&self) -> u8 {
+    pub const fn absolute_voltage(&self) -> u8 {
         self.raw[offsets::ABSOLUTE_VOLTAGE]
     }
 
-    pub fn set_absolute_voltage(&mut self, value: u8) {
+    pub const fn set_absolute_voltage(&mut self, value: u8) {
         self.raw[offsets::ABSOLUTE_VOLTAGE] = value;
     }
 
     /// Current limit P gain (display value = raw * 2).
-    pub fn current_limit_p(&self) -> u8 {
+    pub const fn current_limit_p(&self) -> u8 {
         self.raw[offsets::CURRENT_LIMIT_P]
     }
 
-    pub fn current_limit_p_display(&self) -> u16 {
+    pub const fn current_limit_p_display(&self) -> u16 {
         self.current_limit_p() as u16 * 2
     }
 
-    pub fn set_current_limit_p(&mut self, value: u8) {
+    pub const fn set_current_limit_p(&mut self, value: u8) {
         self.raw[offsets::CURRENT_LIMIT_P] = value;
     }
 
     /// Current limit I gain (raw value).
-    pub fn current_limit_i(&self) -> u8 {
+    pub const fn current_limit_i(&self) -> u8 {
         self.raw[offsets::CURRENT_LIMIT_I]
     }
 
-    pub fn set_current_limit_i(&mut self, value: u8) {
+    pub const fn set_current_limit_i(&mut self, value: u8) {
         self.raw[offsets::CURRENT_LIMIT_I] = value;
     }
 
     /// Current limit D gain (display value = raw * 2).
-    pub fn current_limit_d(&self) -> u8 {
+    pub const fn current_limit_d(&self) -> u8 {
         self.raw[offsets::CURRENT_LIMIT_D]
     }
 
-    pub fn current_limit_d_display(&self) -> u16 {
+    pub const fn current_limit_d_display(&self) -> u16 {
         self.current_limit_d() as u16 * 2
     }
 
-    pub fn set_current_limit_d(&mut self, value: u8) {
+    pub const fn set_current_limit_d(&mut self, value: u8) {
         self.raw[offsets::CURRENT_LIMIT_D] = value;
     }
 
     /// Active brake strength (1-10).
-    pub fn active_brake_strength(&self) -> u8 {
+    pub const fn active_brake_strength(&self) -> u8 {
         self.raw[offsets::ACTIVE_BRAKE_STRENGTH]
     }
 
@@ -436,88 +558,88 @@ impl Am32Config {
     // =========================================================================
 
     /// Motor direction reversed.
-    pub fn direction_reversed(&self) -> bool {
+    pub const fn direction_reversed(&self) -> bool {
         self.raw[offsets::DIRECTION_REVERSED] != 0
     }
 
-    pub fn set_direction_reversed(&mut self, value: bool) {
+    pub const fn set_direction_reversed(&mut self, value: bool) {
         self.raw[offsets::DIRECTION_REVERSED] = value as u8;
     }
 
     /// Bidirectional mode (3D mode).
-    pub fn bidirectional(&self) -> bool {
+    pub const fn bidirectional(&self) -> bool {
         self.raw[offsets::BIDIRECTIONAL] != 0
     }
 
-    pub fn set_bidirectional(&mut self, value: bool) {
+    pub const fn set_bidirectional(&mut self, value: bool) {
         self.raw[offsets::BIDIRECTIONAL] = value as u8;
     }
 
     /// Sinusoidal startup mode.
-    pub fn sinusoidal_startup(&self) -> bool {
+    pub const fn sinusoidal_startup(&self) -> bool {
         self.raw[offsets::SINUSOIDAL_STARTUP] != 0
     }
 
-    pub fn set_sinusoidal_startup(&mut self, value: bool) {
+    pub const fn set_sinusoidal_startup(&mut self, value: bool) {
         self.raw[offsets::SINUSOIDAL_STARTUP] = value as u8;
     }
 
     /// Complementary PWM.
-    pub fn complementary_pwm(&self) -> bool {
+    pub const fn complementary_pwm(&self) -> bool {
         self.raw[offsets::COMPLEMENTARY_PWM] != 0
     }
 
-    pub fn set_complementary_pwm(&mut self, value: bool) {
+    pub const fn set_complementary_pwm(&mut self, value: bool) {
         self.raw[offsets::COMPLEMENTARY_PWM] = value as u8;
     }
 
     /// Variable PWM mode.
-    pub fn variable_pwm_mode(&self) -> VariablePwmMode {
+    pub const fn variable_pwm_mode(&self) -> VariablePwmMode {
         VariablePwmMode::from_byte(self.raw[offsets::VARIABLE_PWM])
     }
 
-    pub fn set_variable_pwm_mode(&mut self, mode: VariablePwmMode) {
+    pub const fn set_variable_pwm_mode(&mut self, mode: VariablePwmMode) {
         self.raw[offsets::VARIABLE_PWM] = mode as u8;
     }
 
     /// Variable PWM enabled (legacy bool accessor).
-    pub fn variable_pwm(&self) -> bool {
+    pub const fn variable_pwm(&self) -> bool {
         self.raw[offsets::VARIABLE_PWM] != 0
     }
 
-    pub fn set_variable_pwm(&mut self, value: bool) {
+    pub const fn set_variable_pwm(&mut self, value: bool) {
         self.raw[offsets::VARIABLE_PWM] = value as u8;
     }
 
     /// Stuck rotor protection.
-    pub fn stuck_rotor_protection(&self) -> bool {
+    pub const fn stuck_rotor_protection(&self) -> bool {
         self.raw[offsets::STUCK_ROTOR_PROTECTION] != 0
     }
 
-    pub fn set_stuck_rotor_protection(&mut self, value: bool) {
+    pub const fn set_stuck_rotor_protection(&mut self, value: bool) {
         self.raw[offsets::STUCK_ROTOR_PROTECTION] = value as u8;
     }
 
     /// Motor timing advance.
-    pub fn timing_advance(&self) -> MotorTiming {
+    pub const fn timing_advance(&self) -> MotorTiming {
         MotorTiming::from_byte(self.raw[offsets::TIMING_ADVANCE])
     }
 
-    pub fn set_timing_advance(&mut self, timing: MotorTiming) {
+    pub const fn set_timing_advance(&mut self, timing: MotorTiming) {
         self.raw[offsets::TIMING_ADVANCE] = timing as u8;
     }
 
     /// PWM frequency in kHz.
-    pub fn pwm_frequency_khz(&self) -> u8 {
+    pub const fn pwm_frequency_khz(&self) -> u8 {
         self.raw[offsets::PWM_FREQUENCY]
     }
 
-    pub fn set_pwm_frequency_khz(&mut self, khz: u8) {
+    pub const fn set_pwm_frequency_khz(&mut self, khz: u8) {
         self.raw[offsets::PWM_FREQUENCY] = khz;
     }
 
     /// Startup power (50-150%).
-    pub fn startup_power(&self) -> u8 {
+    pub const fn startup_power(&self) -> u8 {
         self.raw[offsets::STARTUP_POWER]
     }
 
@@ -526,12 +648,12 @@ impl Am32Config {
     }
 
     /// Motor KV (raw value * 40 = actual KV).
-    pub fn motor_kv_raw(&self) -> u8 {
+    pub const fn motor_kv_raw(&self) -> u8 {
         self.raw[offsets::MOTOR_KV]
     }
 
     /// Motor KV in actual value.
-    pub fn motor_kv(&self) -> u16 {
+    pub const fn motor_kv(&self) -> u16 {
         self.raw[offsets::MOTOR_KV] as u16 * 40
     }
 
@@ -540,43 +662,43 @@ impl Am32Config {
     }
 
     /// Motor poles.
-    pub fn motor_poles(&self) -> u8 {
+    pub const fn motor_poles(&self) -> u8 {
         self.raw[offsets::MOTOR_POLES]
     }
 
-    pub fn set_motor_poles(&mut self, poles: u8) {
+    pub const fn set_motor_poles(&mut self, poles: u8) {
         self.raw[offsets::MOTOR_POLES] = poles;
     }
 
     /// Brake mode on stop.
-    pub fn brake_mode(&self) -> BrakeMode {
+    pub const fn brake_mode(&self) -> BrakeMode {
         BrakeMode::from_byte(self.raw[offsets::BRAKE_ON_STOP])
     }
 
-    pub fn set_brake_mode(&mut self, mode: BrakeMode) {
+    pub const fn set_brake_mode(&mut self, mode: BrakeMode) {
         self.raw[offsets::BRAKE_ON_STOP] = mode as u8;
     }
 
     /// Brake on stop enabled (legacy bool accessor).
-    pub fn brake_on_stop(&self) -> bool {
+    pub const fn brake_on_stop(&self) -> bool {
         self.raw[offsets::BRAKE_ON_STOP] != 0
     }
 
-    pub fn set_brake_on_stop(&mut self, value: bool) {
+    pub const fn set_brake_on_stop(&mut self, value: bool) {
         self.raw[offsets::BRAKE_ON_STOP] = value as u8;
     }
 
     /// Stall protection.
-    pub fn stall_protection(&self) -> bool {
+    pub const fn stall_protection(&self) -> bool {
         self.raw[offsets::STALL_PROTECTION] != 0
     }
 
-    pub fn set_stall_protection(&mut self, value: bool) {
+    pub const fn set_stall_protection(&mut self, value: bool) {
         self.raw[offsets::STALL_PROTECTION] = value as u8;
     }
 
     /// Beep volume (0-11).
-    pub fn beep_volume(&self) -> u8 {
+    pub const fn beep_volume(&self) -> u8 {
         self.raw[offsets::BEEP_VOLUME]
     }
 
@@ -585,74 +707,74 @@ impl Am32Config {
     }
 
     /// 30ms telemetry output.
-    pub fn telemetry_30ms(&self) -> bool {
+    pub const fn telemetry_30ms(&self) -> bool {
         self.raw[offsets::TELEMETRY_30MS] != 0
     }
 
-    pub fn set_telemetry_30ms(&mut self, value: bool) {
+    pub const fn set_telemetry_30ms(&mut self, value: bool) {
         self.raw[offsets::TELEMETRY_30MS] = value as u8;
     }
 
     /// Servo low value. Actual microseconds = (value * 2) + 750.
-    pub fn servo_low(&self) -> u8 {
+    pub const fn servo_low(&self) -> u8 {
         self.raw[offsets::SERVO_LOW]
     }
 
-    pub fn servo_low_us(&self) -> u16 {
+    pub const fn servo_low_us(&self) -> u16 {
         self.raw[offsets::SERVO_LOW] as u16 * 2 + 750
     }
 
-    pub fn set_servo_low(&mut self, value: u8) {
+    pub const fn set_servo_low(&mut self, value: u8) {
         self.raw[offsets::SERVO_LOW] = value;
     }
 
     /// Servo high value. Actual microseconds = (value * 2) + 1750.
-    pub fn servo_high(&self) -> u8 {
+    pub const fn servo_high(&self) -> u8 {
         self.raw[offsets::SERVO_HIGH]
     }
 
-    pub fn servo_high_us(&self) -> u16 {
+    pub const fn servo_high_us(&self) -> u16 {
         self.raw[offsets::SERVO_HIGH] as u16 * 2 + 1750
     }
 
-    pub fn set_servo_high(&mut self, value: u8) {
+    pub const fn set_servo_high(&mut self, value: u8) {
         self.raw[offsets::SERVO_HIGH] = value;
     }
 
     /// Servo neutral. Actual microseconds = 1374 + value.
-    pub fn servo_neutral(&self) -> u8 {
+    pub const fn servo_neutral(&self) -> u8 {
         self.raw[offsets::SERVO_NEUTRAL]
     }
 
-    pub fn servo_neutral_us(&self) -> u16 {
+    pub const fn servo_neutral_us(&self) -> u16 {
         1374 + self.raw[offsets::SERVO_NEUTRAL] as u16
     }
 
-    pub fn set_servo_neutral(&mut self, value: u8) {
+    pub const fn set_servo_neutral(&mut self, value: u8) {
         self.raw[offsets::SERVO_NEUTRAL] = value;
     }
 
     /// Servo deadband (raw value).
-    pub fn servo_deadband(&self) -> u8 {
+    pub const fn servo_deadband(&self) -> u8 {
         self.raw[offsets::SERVO_DEADBAND]
     }
 
-    pub fn set_servo_deadband(&mut self, value: u8) {
+    pub const fn set_servo_deadband(&mut self, value: u8) {
         self.raw[offsets::SERVO_DEADBAND] = value;
     }
 
     /// Low voltage cutoff enabled.
-    pub fn low_voltage_cutoff(&self) -> bool {
+    pub const fn low_voltage_cutoff(&self) -> bool {
         self.raw[offsets::LOW_VOLTAGE_CUTOFF] != 0
     }
 
-    pub fn set_low_voltage_cutoff(&mut self, value: bool) {
+    pub const fn set_low_voltage_cutoff(&mut self, value: bool) {
         self.raw[offsets::LOW_VOLTAGE_CUTOFF] = value as u8;
     }
 
     /// Low voltage cutoff threshold (raw value).
     /// Actual voltage = (raw + 250) / 100.0
-    pub fn lvc_threshold(&self) -> u8 {
+    pub const fn lvc_threshold(&self) -> u8 {
         self.raw[offsets::LVC_THRESHOLD]
     }
 
@@ -661,30 +783,30 @@ impl Am32Config {
         (self.raw[offsets::LVC_THRESHOLD] as f32 + 250.0) / 100.0
     }
 
-    pub fn set_lvc_threshold(&mut self, value: u8) {
+    pub const fn set_lvc_threshold(&mut self, value: u8) {
         self.raw[offsets::LVC_THRESHOLD] = value;
     }
 
     /// RC car style reversing.
-    pub fn rc_car_reversing(&self) -> bool {
+    pub const fn rc_car_reversing(&self) -> bool {
         self.raw[offsets::RC_CAR_REVERSING] != 0
     }
 
-    pub fn set_rc_car_reversing(&mut self, value: bool) {
+    pub const fn set_rc_car_reversing(&mut self, value: bool) {
         self.raw[offsets::RC_CAR_REVERSING] = value as u8;
     }
 
     /// Use Hall sensors (if equipped).
-    pub fn use_hall_sensors(&self) -> bool {
+    pub const fn use_hall_sensors(&self) -> bool {
         self.raw[offsets::USE_HALL_SENSORS] != 0
     }
 
-    pub fn set_use_hall_sensors(&mut self, value: bool) {
+    pub const fn set_use_hall_sensors(&mut self, value: bool) {
         self.raw[offsets::USE_HALL_SENSORS] = value as u8;
     }
 
     /// Sine mode range (5-25% throttle).
-    pub fn sine_mode_range(&self) -> u8 {
+    pub const fn sine_mode_range(&self) -> u8 {
         self.raw[offsets::SINE_MODE_RANGE]
     }
 
@@ -693,7 +815,7 @@ impl Am32Config {
     }
 
     /// Drag brake strength (1-10).
-    pub fn drag_brake_strength(&self) -> u8 {
+    pub const fn drag_brake_strength(&self) -> u8 {
         self.raw[offsets::DRAG_BRAKE_STRENGTH]
     }
 
@@ -702,7 +824,7 @@ impl Am32Config {
     }
 
     /// Running brake strength (1-10).
-    pub fn running_brake_strength(&self) -> u8 {
+    pub const fn running_brake_strength(&self) -> u8 {
         self.raw[offsets::RUNNING_BRAKE_STRENGTH]
     }
 
@@ -711,12 +833,12 @@ impl Am32Config {
     }
 
     /// Temperature limit (70-142°C, >140 = disabled).
-    pub fn temperature_limit(&self) -> u8 {
+    pub const fn temperature_limit(&self) -> u8 {
         self.raw[offsets::TEMPERATURE_LIMIT]
     }
 
     /// Temperature limit in Celsius, or None if disabled.
-    pub fn temperature_limit_celsius(&self) -> Option<u8> {
+    pub const fn temperature_limit_celsius(&self) -> Option<u8> {
         let val = self.temperature_limit();
         if val > 140 {
             None // Disabled
@@ -725,17 +847,17 @@ impl Am32Config {
         }
     }
 
-    pub fn set_temperature_limit(&mut self, value: u8) {
+    pub const fn set_temperature_limit(&mut self, value: u8) {
         self.raw[offsets::TEMPERATURE_LIMIT] = value;
     }
 
     /// Current limit (raw value, ×2 = Amps, >100 = disabled).
-    pub fn current_limit(&self) -> u8 {
+    pub const fn current_limit(&self) -> u8 {
         self.raw[offsets::CURRENT_LIMIT]
     }
 
     /// Current limit in Amps, or None if disabled.
-    pub fn current_limit_amps(&self) -> Option<u16> {
+    pub const fn current_limit_amps(&self) -> Option<u16> {
         let val = self.current_limit();
         if val > 100 {
             None // Disabled
@@ -744,12 +866,12 @@ impl Am32Config {
         }
     }
 
-    pub fn set_current_limit(&mut self, value: u8) {
+    pub const fn set_current_limit(&mut self, value: u8) {
         self.raw[offsets::CURRENT_LIMIT] = value;
     }
 
     /// Sine mode power (1-10).
-    pub fn sine_mode_power(&self) -> u8 {
+    pub const fn sine_mode_power(&self) -> u8 {
         self.raw[offsets::SINE_MODE_POWER]
     }
 
@@ -758,20 +880,20 @@ impl Am32Config {
     }
 
     /// Signal input type.
-    pub fn signal_type(&self) -> SignalType {
+    pub const fn signal_type(&self) -> SignalType {
         SignalType::from_byte(self.raw[offsets::SIGNAL_TYPE])
     }
 
-    pub fn set_signal_type(&mut self, signal_type: SignalType) {
+    pub const fn set_signal_type(&mut self, signal_type: SignalType) {
         self.raw[offsets::SIGNAL_TYPE] = signal_type as u8;
     }
 
     /// Auto timing enabled.
-    pub fn auto_timing(&self) -> bool {
+    pub const fn auto_timing(&self) -> bool {
         self.raw[offsets::AUTO_TIMING] != 0
     }
 
-    pub fn set_auto_timing(&mut self, value: bool) {
+    pub const fn set_auto_timing(&mut self, value: bool) {
         self.raw[offsets::AUTO_TIMING] = value as u8;
     }
 }
@@ -789,55 +911,153 @@ impl fmt::Display for Am32Config {
 
         writeln!(f, "Throttle/Rate Settings")?;
         writeln!(f, "----------------------")?;
-        writeln!(f, "Max Rate of Change:  {} (display: {:.1})", self.max_rate_of_change(), self.max_rate_of_change_display())?;
-        writeln!(f, "Min Duty:            {} (display: {:.1}%)", self.min_duty(), self.min_duty_percent())?;
-        writeln!(f, "Stick Calib Disabled:{}", if self.disable_stick_calibration() { " Yes" } else { " No" })?;
+        writeln!(
+            f,
+            "Max Rate of Change:  {} (display: {:.1})",
+            self.max_rate_of_change(),
+            self.max_rate_of_change_display()
+        )?;
+        writeln!(
+            f,
+            "Min Duty:            {} (display: {:.1}%)",
+            self.min_duty(),
+            self.min_duty_percent()
+        )?;
+        writeln!(
+            f,
+            "Stick Calib Disabled:{}",
+            if self.disable_stick_calibration() {
+                " Yes"
+            } else {
+                " No"
+            }
+        )?;
         writeln!(f)?;
 
         writeln!(f, "Current Limit PID")?;
         writeln!(f, "-----------------")?;
-        writeln!(f, "P Gain:              {} (display: {})", self.current_limit_p(), self.current_limit_p_display())?;
+        writeln!(
+            f,
+            "P Gain:              {} (display: {})",
+            self.current_limit_p(),
+            self.current_limit_p_display()
+        )?;
         writeln!(f, "I Gain:              {}", self.current_limit_i())?;
-        writeln!(f, "D Gain:              {} (display: {})", self.current_limit_d(), self.current_limit_d_display())?;
+        writeln!(
+            f,
+            "D Gain:              {} (display: {})",
+            self.current_limit_d(),
+            self.current_limit_d_display()
+        )?;
         writeln!(f)?;
 
         writeln!(f, "Motor Settings")?;
         writeln!(f, "--------------")?;
-        writeln!(f, "Direction Reversed:  {}", if self.direction_reversed() { "Yes" } else { "No" })?;
-        writeln!(f, "Bidirectional (3D):  {}", if self.bidirectional() { "Yes" } else { "No" })?;
-        writeln!(f, "Motor KV:            {} (raw: {})", self.motor_kv(), self.motor_kv_raw())?;
+        writeln!(
+            f,
+            "Direction Reversed:  {}",
+            if self.direction_reversed() {
+                "Yes"
+            } else {
+                "No"
+            }
+        )?;
+        writeln!(
+            f,
+            "Bidirectional (3D):  {}",
+            if self.bidirectional() { "Yes" } else { "No" }
+        )?;
+        writeln!(
+            f,
+            "Motor KV:            {} (raw: {})",
+            self.motor_kv(),
+            self.motor_kv_raw()
+        )?;
         writeln!(f, "Motor Poles:         {}", self.motor_poles())?;
         writeln!(f, "Timing Advance:      {}", self.timing_advance())?;
-        writeln!(f, "Auto Timing:         {}", if self.auto_timing() { "Yes" } else { "No" })?;
+        writeln!(
+            f,
+            "Auto Timing:         {}",
+            if self.auto_timing() { "Yes" } else { "No" }
+        )?;
         writeln!(f)?;
 
         writeln!(f, "PWM Settings")?;
         writeln!(f, "------------")?;
         writeln!(f, "PWM Frequency:       {} kHz", self.pwm_frequency_khz())?;
-        writeln!(f, "Complementary PWM:   {}", if self.complementary_pwm() { "Yes" } else { "No" })?;
+        writeln!(
+            f,
+            "Complementary PWM:   {}",
+            if self.complementary_pwm() {
+                "Yes"
+            } else {
+                "No"
+            }
+        )?;
         writeln!(f, "Variable PWM:        {}", self.variable_pwm_mode())?;
         writeln!(f)?;
 
         writeln!(f, "Startup & Protection")?;
         writeln!(f, "--------------------")?;
         writeln!(f, "Startup Power:       {}%", self.startup_power())?;
-        writeln!(f, "Sinusoidal Startup:  {}", if self.sinusoidal_startup() { "Yes" } else { "No" })?;
-        writeln!(f, "Stuck Rotor Prot.:   {}", if self.stuck_rotor_protection() { "Yes" } else { "No" })?;
-        writeln!(f, "Stall Protection:    {}", if self.stall_protection() { "Yes" } else { "No" })?;
+        writeln!(
+            f,
+            "Sinusoidal Startup:  {}",
+            if self.sinusoidal_startup() {
+                "Yes"
+            } else {
+                "No"
+            }
+        )?;
+        writeln!(
+            f,
+            "Stuck Rotor Prot.:   {}",
+            if self.stuck_rotor_protection() {
+                "Yes"
+            } else {
+                "No"
+            }
+        )?;
+        writeln!(
+            f,
+            "Stall Protection:    {}",
+            if self.stall_protection() { "Yes" } else { "No" }
+        )?;
         writeln!(f)?;
 
         writeln!(f, "Braking")?;
         writeln!(f, "-------")?;
         writeln!(f, "Brake Mode:          {}", self.brake_mode())?;
-        writeln!(f, "Active Brake:        {}/10", self.active_brake_strength())?;
+        writeln!(
+            f,
+            "Active Brake:        {}/10",
+            self.active_brake_strength()
+        )?;
         writeln!(f, "Drag Brake:          {}/10", self.drag_brake_strength())?;
-        writeln!(f, "Running Brake:       {}/10", self.running_brake_strength())?;
+        writeln!(
+            f,
+            "Running Brake:       {}/10",
+            self.running_brake_strength()
+        )?;
         writeln!(f)?;
 
         writeln!(f, "Limits")?;
         writeln!(f, "------")?;
-        writeln!(f, "LVC Enabled:         {}", if self.low_voltage_cutoff() { "Yes" } else { "No" })?;
-        writeln!(f, "LVC Threshold:       {:.2}V (raw: {})", self.lvc_threshold_volts(), self.lvc_threshold())?;
+        writeln!(
+            f,
+            "LVC Enabled:         {}",
+            if self.low_voltage_cutoff() {
+                "Yes"
+            } else {
+                "No"
+            }
+        )?;
+        writeln!(
+            f,
+            "LVC Threshold:       {:.2}V (raw: {})",
+            self.lvc_threshold_volts(),
+            self.lvc_threshold()
+        )?;
         match self.temperature_limit_celsius() {
             Some(t) => writeln!(f, "Temperature Limit:   {}°C", t)?,
             None => writeln!(f, "Temperature Limit:   Disabled")?,
@@ -851,9 +1071,24 @@ impl fmt::Display for Am32Config {
         writeln!(f, "Servo / PWM Input")?;
         writeln!(f, "-----------------")?;
         writeln!(f, "Signal Type:         {}", self.signal_type())?;
-        writeln!(f, "Servo Low:           {} μs (raw: {})", self.servo_low_us(), self.servo_low())?;
-        writeln!(f, "Servo High:          {} μs (raw: {})", self.servo_high_us(), self.servo_high())?;
-        writeln!(f, "Servo Neutral:       {} μs (raw: {})", self.servo_neutral_us(), self.servo_neutral())?;
+        writeln!(
+            f,
+            "Servo Low:           {} μs (raw: {})",
+            self.servo_low_us(),
+            self.servo_low()
+        )?;
+        writeln!(
+            f,
+            "Servo High:          {} μs (raw: {})",
+            self.servo_high_us(),
+            self.servo_high()
+        )?;
+        writeln!(
+            f,
+            "Servo Neutral:       {} μs (raw: {})",
+            self.servo_neutral_us(),
+            self.servo_neutral()
+        )?;
         writeln!(f, "Servo Deadband:      {}", self.servo_deadband())?;
         writeln!(f)?;
 
@@ -866,9 +1101,21 @@ impl fmt::Display for Am32Config {
         writeln!(f, "Other")?;
         writeln!(f, "-----")?;
         writeln!(f, "Beep Volume:         {}/11", self.beep_volume())?;
-        writeln!(f, "30ms Telemetry:      {}", if self.telemetry_30ms() { "Yes" } else { "No" })?;
-        writeln!(f, "RC Car Reversing:    {}", if self.rc_car_reversing() { "Yes" } else { "No" })?;
-        writeln!(f, "Use Hall Sensors:    {}", if self.use_hall_sensors() { "Yes" } else { "No" })?;
+        writeln!(
+            f,
+            "30ms Telemetry:      {}",
+            if self.telemetry_30ms() { "Yes" } else { "No" }
+        )?;
+        writeln!(
+            f,
+            "RC Car Reversing:    {}",
+            if self.rc_car_reversing() { "Yes" } else { "No" }
+        )?;
+        writeln!(
+            f,
+            "Use Hall Sensors:    {}",
+            if self.use_hall_sensors() { "Yes" } else { "No" }
+        )?;
         Ok(())
     }
 }
@@ -928,8 +1175,14 @@ pub enum Setting {
 impl Setting {
     /// Parse setting name from string.
     pub fn parse(s: &str) -> Option<Self> {
-        let s = s.to_lowercase().replace(['-', '_'], "");
-        match s.as_str() {
+        // Lowercase ASCII and drop '-' / '_' without allocating.
+        let mut buf = [0u8; 48];
+        let mut len = 0;
+        for b in s.bytes().filter(|b| !matches!(b, b'-' | b'_')) {
+            *buf.get_mut(len)? = b.to_ascii_lowercase();
+            len += 1;
+        }
+        match core::str::from_utf8(&buf[..len]).ok()? {
             // Throttle/Rate settings
             "maxrateofchange" | "maxrate" | "roc" => Some(Self::MaxRateOfChange),
             "minduty" => Some(Self::MinDuty),
@@ -984,7 +1237,7 @@ impl Setting {
     }
 
     /// Get all available setting names.
-    pub fn all_names() -> &'static [&'static str] {
+    pub const fn all_names() -> &'static [&'static str] {
         &[
             // Throttle/Rate
             "max-rate",
@@ -1037,7 +1290,7 @@ impl Setting {
     }
 
     /// Returns true if this setting takes a boolean value.
-    pub fn is_bool(&self) -> bool {
+    pub const fn is_bool(&self) -> bool {
         matches!(
             self,
             Self::DisableStickCalibration
@@ -1056,7 +1309,7 @@ impl Setting {
     }
 
     /// Get description and valid range for this setting.
-    pub fn description(&self) -> &'static str {
+    pub const fn description(&self) -> &'static str {
         match self {
             // Throttle/Rate settings
             Self::MaxRateOfChange => "Max rate of change (1-200, display=raw/10)",
@@ -1101,7 +1354,9 @@ impl Setting {
             // Input modes
             Self::RcCarReversing => "RC car reversing mode (on/off)",
             Self::UseHallSensors => "Use Hall sensors (on/off)",
-            Self::SignalType => "Signal type (0=auto, 1=dshot, 2=servo)",
+            Self::SignalType => {
+                "Signal type (0=auto, 1=dshot, 2=servo, 3=serial, 4=edt+arm, 5=dronecan)"
+            }
             // Sine mode
             Self::SineModeRange => "Sine mode range percent (5-25)",
             Self::SineModePower => "Sine mode power (1-10)",
@@ -1111,10 +1366,13 @@ impl Setting {
 
 /// Parse a value string into bool.
 pub fn parse_bool(s: &str) -> Option<bool> {
-    match s.to_lowercase().as_str() {
-        "on" | "true" | "yes" | "1" | "enabled" => Some(true),
-        "off" | "false" | "no" | "0" | "disabled" => Some(false),
-        _ => None,
+    let is = |words: &[&str]| words.iter().any(|w| w.eq_ignore_ascii_case(s));
+    if is(&["on", "true", "yes", "1", "enabled"]) {
+        Some(true)
+    } else if is(&["off", "false", "no", "0", "disabled"]) {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -1306,9 +1564,11 @@ pub fn apply_setting(
             config.set_use_hall_sensors(parse_bool(value).ok_or("expected on/off")?);
         }
         Setting::SignalType => {
-            let v: u8 = value.parse().map_err(|_| "expected 0-2")?;
-            if v > 2 {
-                return Err("signal type must be 0-2");
+            let v: u8 = value.parse().map_err(|_| "expected 0-5")?;
+            if v > 5 {
+                return Err(
+                    "signal type must be 0-5 (0=auto, 1=dshot, 2=servo, 3=serial, 4=edt+arm, 5=dronecan)",
+                );
             }
             config.set_signal_type(SignalType::from_byte(v));
         }
@@ -1350,7 +1610,7 @@ pub enum BootStatus {
 
 impl BootStatus {
     /// Check if this status indicates a problem that needs recovery.
-    pub fn needs_recovery(&self) -> bool {
+    pub const fn needs_recovery(&self) -> bool {
         !matches!(self, BootStatus::Bootable)
     }
 }
@@ -1669,7 +1929,10 @@ mod tests {
 
     #[test]
     fn setting_from_str() {
-        assert_eq!(Setting::parse("direction"), Some(Setting::DirectionReversed));
+        assert_eq!(
+            Setting::parse("direction"),
+            Some(Setting::DirectionReversed)
+        );
         assert_eq!(Setting::parse("motor-kv"), Some(Setting::MotorKv));
         assert_eq!(Setting::parse("pwm_freq"), Some(Setting::PwmFrequency));
         assert_eq!(Setting::parse("unknown"), None);
@@ -1828,7 +2091,8 @@ mod tests {
         assert!(toml_str.contains("bidirectional = true"));
 
         // Deserialize back
-        let data2: Am32ConfigData = toml::from_str(&toml_str).expect("Failed to deserialize from TOML");
+        let data2: Am32ConfigData =
+            toml::from_str(&toml_str).expect("Failed to deserialize from TOML");
         let config2 = Am32Config::from(&data2);
 
         // Verify all fields match
@@ -1868,7 +2132,8 @@ motor_poles = 12
 direction_reversed = true
 "#;
 
-        let data: Am32ConfigData = toml::from_str(partial_toml).expect("Failed to deserialize partial TOML");
+        let data: Am32ConfigData =
+            toml::from_str(partial_toml).expect("Failed to deserialize partial TOML");
         let config = Am32Config::from(&data);
 
         // Specified values should be set
@@ -1908,24 +2173,6 @@ direction_reversed = true
     }
 
     #[test]
-    fn clear_and_restore_boot_byte() {
-        let mut config = Am32Config::from_bytes([0; 256]);
-        config.set_boot_byte(0x01);
-        assert!(config.is_bootable());
-
-        // Clear should return previous value and set to 0
-        let previous = config.clear_boot_byte();
-        assert_eq!(previous, 0x01);
-        assert_eq!(config.boot_byte(), 0x00);
-        assert!(!config.is_bootable());
-
-        // Restore should set to 1
-        config.restore_boot_byte();
-        assert_eq!(config.boot_byte(), 0x01);
-        assert!(config.is_bootable());
-    }
-
-    #[test]
     fn eeprom_bytes_access() {
         let mut raw = [0xAAu8; 256];
         raw[0] = 0x01; // boot byte
@@ -1936,6 +2183,41 @@ direction_reversed = true
         assert_eq!(eeprom.len(), 48);
         assert_eq!(eeprom[0], 0x01);
         assert_eq!(eeprom[47], 0xFF);
+    }
+
+    #[test]
+    fn defaults_are_bootable_and_current() {
+        // F1: byte 0 = 0 left the ESC stuck in the bootloader.
+        let config = Am32Config::with_defaults();
+        assert_eq!(config.boot_status(), BootStatus::Bootable);
+        assert_eq!(config.eeprom_version(), Am32Config::CURRENT_EEPROM_VERSION);
+        // Melody and CAN erased, not zeroed.
+        assert!(config.as_bytes()[0x30..0xC0].iter().all(|&b| b == 0xFF));
+    }
+
+    #[test]
+    fn apply_defaults_keeps_melody_can_and_versions() {
+        let mut raw = [0u8; 256];
+        raw[0] = 0x00; // boot disabled
+        raw[1] = 5; // newer eeprom version: keep
+        raw[3] = 2;
+        raw[4] = 21;
+        raw[0x30..0xB0].fill(0x42);
+        raw[0xB0..0xB8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        let mut config = Am32Config::from_bytes(raw);
+        config.apply_defaults();
+
+        let b = config.as_bytes();
+        assert_eq!(b[0], 0x00, "boot byte kept (cleared by a failed flash)");
+        assert_eq!(b[1], 5);
+        assert_eq!((b[3], b[4]), (2, 21));
+        assert!(b[0x30..0xB0].iter().all(|&x| x == 0x42));
+        assert_eq!(&b[0xB0..0xB8], &[1, 2, 3, 4, 5, 6, 7, 8]);
+
+        let mut old = Am32Config::from_bytes([0u8; 256]);
+        old.as_bytes_mut()[1] = 2;
+        old.apply_defaults();
+        assert_eq!(old.eeprom_version(), Am32Config::CURRENT_EEPROM_VERSION);
     }
 
     #[test]
@@ -1989,8 +2271,8 @@ direction_reversed = true
         assert_eq!(config.boot_status(), BootStatus::StuckInBootloader);
         assert!(config.boot_status().needs_recovery());
 
-        // Recovery: restore boot byte
-        config.restore_boot_byte();
+        // Recovery (what a finished flash does): set the boot byte
+        config.set_boot_byte(Am32Config::BOOT_BYTE_ENABLED);
 
         // Now bootable
         assert_eq!(config.boot_status(), BootStatus::Bootable);
