@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use esc_config_icd::{
     ChunkReq, ConnectEndpoint, EEPROM_SIZE, EscError, EscInfo, FlashBeginEndpoint,
-    FlashChunkEndpoint, FlashFinishEndpoint, ReadEepromEndpoint, ReadEndpoint,
+    FlashChunkEndpoint, FlashFinishEndpoint, RELAY_USB_VID_PID, ReadEepromEndpoint, ReadEndpoint,
     ReadFileNameEndpoint, ReadFirmwareEndpoint, ReadFirmwareReq, ReadReq, RunEndpoint,
     ServerInfoEndpoint, WriteEepromEndpoint,
 };
@@ -21,9 +21,6 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::device::{EscDevice, Session};
-
-/// USB VID:PID of the relay firmware (pid.codes test PID).
-pub const RELAY_VID_PID: (u16, u16) = (0x1209, 0x0001);
 
 /// Longest any single operation may take (a 256-byte flash chunk with retries is
 /// well under a second; connect with retries about one).
@@ -164,7 +161,7 @@ pub fn find_relays() -> Result<Vec<String>> {
         .into_iter()
         .filter(|p| {
             matches!(&p.port_type, serialport::SerialPortType::UsbPort(u)
-                if (u.vid, u.pid) == RELAY_VID_PID)
+                if (u.vid, u.pid) == RELAY_USB_VID_PID)
         })
         .map(|p| p.port_name)
         .collect())

@@ -30,11 +30,6 @@ impl Duration {
         self.micros
     }
 
-    /// Milliseconds, rounded up.
-    pub const fn as_millis_ceil(self) -> u32 {
-        self.micros.div_ceil(1000)
-    }
-
     /// `self + other`, saturating.
     pub const fn saturating_add(self, other: Self) -> Self {
         Self {

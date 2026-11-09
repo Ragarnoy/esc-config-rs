@@ -10,7 +10,7 @@ use esc_config_icd::{EEPROM_SIZE, EscInfo, MAX_BLOCK};
 use esc_protocol::am32_config::Am32Config;
 use esc_protocol::device::{DeviceInfo, classify_device};
 use esc_protocol::layout::Layout;
-use esc_protocol::melody::MELODY_OFFSET;
+use esc_protocol::melody::{MELODY_OFFSET, MELODY_SIZE};
 
 /// Settings bytes of the AM32 EEPROM: after boot byte and version bytes (0..5),
 /// before the melody (48..176).
@@ -68,14 +68,8 @@ impl<D: EscDevice> Session<D> {
     }
 
     /// Flash layout (protocol units).
-    pub const fn layout(&self) -> Layout {
-        let l = self.info.layout;
-        Layout {
-            address_shift: l.address_shift,
-            firmware_start: l.firmware_start,
-            filename_start: l.filename_start,
-            eeprom_start: l.eeprom_start,
-        }
+    pub fn layout(&self) -> Layout {
+        self.info.layout.into()
     }
 
     /// Firmware file name, e.g. `AM32_F4A_4IN1_F421`. Empty if none.
@@ -154,29 +148,33 @@ impl<D: EscDevice> Session<D> {
     }
 
     /// Read the 128-byte melody (settings bytes 48..176).
-    pub fn read_melody(&mut self) -> Result<[u8; 128]> {
+    pub fn read_melody(&mut self) -> Result<[u8; MELODY_SIZE]> {
         let config = self.read_settings()?;
-        let mut melody = [0u8; 128];
-        melody.copy_from_slice(&config.as_bytes()[MELODY_OFFSET..MELODY_OFFSET + 128]);
+        let mut melody = [0u8; MELODY_SIZE];
+        melody.copy_from_slice(&config.as_bytes()[MELODY_OFFSET..MELODY_OFFSET + MELODY_SIZE]);
         Ok(melody)
     }
 
     /// Replace the melody, keeping every other setting (read-modify-write).
-    pub fn write_melody(&mut self, melody: &[u8; 128]) -> Result<()> {
+    pub fn write_melody(&mut self, melody: &[u8; MELODY_SIZE]) -> Result<()> {
         let mut config = self.read_settings()?;
-        config.as_bytes_mut()[MELODY_OFFSET..MELODY_OFFSET + 128].copy_from_slice(melody);
+        config.as_bytes_mut()[MELODY_OFFSET..MELODY_OFFSET + MELODY_SIZE].copy_from_slice(melody);
         self.write_settings(&config)
     }
 
     /// Flash an app image: clear the boot byte, write 256-byte chunks in order
     /// (each read back by the relay), set the boot byte. On error the boot byte
     /// stays cleared and the ESC stays in its bootloader.
+    ///
+    /// `load_offset` is where the image was built to run, in bytes from the start
+    /// of flash (from the hex file); it must be this ESC's app start.
     pub fn flash_firmware(
         &mut self,
         image: &[u8],
+        load_offset: u32,
         mut progress: impl FnMut(usize, usize),
     ) -> Result<()> {
-        self.check_image(image)?;
+        self.check_image(image, load_offset)?;
         self.device.flash_begin().context("flash begin failed")?;
         for (i, chunk) in image.chunks(MAX_BLOCK).enumerate() {
             let offset = i * MAX_BLOCK;
@@ -188,13 +186,14 @@ impl<D: EscDevice> Session<D> {
         self.device.flash_finish().context("flash finish failed")
     }
 
-    /// Compare the app region with an image.
+    /// Compare the app region with an image built for `load_offset`.
     pub fn verify_firmware(
         &mut self,
         image: &[u8],
+        load_offset: u32,
         mut progress: impl FnMut(usize, usize),
     ) -> Result<()> {
-        self.check_image(image)?;
+        self.check_image(image, load_offset)?;
         for (i, chunk) in image.chunks(MAX_BLOCK).enumerate() {
             let offset = i * MAX_BLOCK;
             #[allow(clippy::cast_possible_truncation)] // ≤ 256
@@ -215,7 +214,14 @@ impl<D: EscDevice> Session<D> {
         self.device.run().context("failed to send Run")
     }
 
-    fn check_image(&self, image: &[u8]) -> Result<()> {
+    fn check_image(&self, image: &[u8], load_offset: u32) -> Result<()> {
+        let expected = self.layout().firmware_byte_offset();
+        if load_offset != expected {
+            bail!(
+                "firmware starts at app offset 0x{load_offset:X}, but this ESC's bootloader \
+                 expects 0x{expected:X} (DroneCAN bootloaders use 0x4000, others 0x1000)"
+            );
+        }
         let max = self.info.max_firmware_size as usize;
         if image.is_empty() {
             bail!("firmware image is empty");
@@ -320,6 +326,9 @@ mod tests {
         }
     }
 
+    /// App start of the mock ESC, in bytes.
+    const APP: u32 = 0x1000;
+
     fn session() -> Session<MockDevice> {
         Session::new(MockDevice::new()).unwrap()
     }
@@ -372,20 +381,20 @@ mod tests {
         let mut s = session();
         let image: Vec<u8> = (0..1000u32).map(|i| i as u8).collect();
         let mut calls = Vec::new();
-        s.flash_firmware(&image, |done, total| calls.push((done, total)))
+        s.flash_firmware(&image, APP, |done, total| calls.push((done, total)))
             .unwrap();
         assert_eq!(calls.last(), Some(&(1000, 1000)));
         assert_eq!(calls.len(), 4);
         assert_eq!(&s.device.app[..1000], image.as_slice());
         assert_eq!(s.device.eeprom[0], 0x01);
-        s.verify_firmware(&image, |_, _| {}).unwrap();
+        s.verify_firmware(&image, APP, |_, _| {}).unwrap();
     }
 
     #[test]
     fn failed_flash_leaves_the_boot_byte_cleared() {
         let mut s = session();
         s.device.fail_chunk_at = Some(512);
-        let err = s.flash_firmware(&[0x11; 1024], |_, _| {}).unwrap_err();
+        let err = s.flash_firmware(&[0x11; 1024], APP, |_, _| {}).unwrap_err();
         assert!(format!("{err:#}").contains("0x00200"), "{err:#}");
         assert_eq!(s.device.eeprom[0], 0x00);
     }
@@ -393,10 +402,10 @@ mod tests {
     #[test]
     fn verify_reports_the_offset() {
         let mut s = session();
-        s.flash_firmware(&[0x22; 600], |_, _| {}).unwrap();
+        s.flash_firmware(&[0x22; 600], APP, |_, _| {}).unwrap();
         let mut other = vec![0x22; 600];
         other[300] = 0;
-        let err = s.verify_firmware(&other, |_, _| {}).unwrap_err();
+        let err = s.verify_firmware(&other, APP, |_, _| {}).unwrap_err();
         assert!(err.to_string().contains("0x00100"), "{err}");
     }
 
@@ -404,8 +413,10 @@ mod tests {
     fn oversized_or_empty_images_are_refused() {
         let mut s = session();
         let max = s.info().max_firmware_size as usize;
-        assert!(s.flash_firmware(&vec![0; max + 1], |_, _| {}).is_err());
-        assert!(s.flash_firmware(&[], |_, _| {}).is_err());
+        assert!(s.flash_firmware(&vec![0; max + 1], APP, |_, _| {}).is_err());
+        assert!(s.flash_firmware(&[], APP, |_, _| {}).is_err());
+        let err = s.flash_firmware(&[0; 64], 0x4000, |_, _| {}).unwrap_err();
+        assert!(err.to_string().contains("0x4000"), "{err}");
         assert_eq!(s.device.eeprom[0], 0x01, "refused before touching the ESC");
     }
 

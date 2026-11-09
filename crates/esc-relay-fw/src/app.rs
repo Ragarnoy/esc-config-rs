@@ -29,6 +29,10 @@ pub struct Context {
     pub uart: Uart,
     /// Connect reply and layout of the connected ESC.
     pub connected: Option<(ConnectResponse, Layout)>,
+    /// A flash is in progress and has not failed: `flash/begin` succeeded and so
+    /// did every chunk since. The relay enforces the order itself, so no client
+    /// can set the boot byte over a half-written app.
+    pub flashing: bool,
 }
 
 impl Context {
@@ -84,6 +88,7 @@ fn server_info(_ctx: &mut Context, _hdr: VarHeader, _req: ()) -> ServerInfo {
 
 async fn connect(ctx: &mut Context, _hdr: VarHeader, _req: ()) -> ConnectResp {
     ctx.connected = None;
+    ctx.flashing = false;
     let esc = Esc::connect_with(&mut ctx.uart, Timing::default()).await?;
     let info = EscInfo::of(&esc);
     let parts = (*esc.connect_reply(), *esc.layout());
@@ -94,6 +99,7 @@ async fn connect(ctx: &mut Context, _hdr: VarHeader, _req: ()) -> ConnectResp {
 
 fn disconnect(ctx: &mut Context, _hdr: VarHeader, _req: ()) -> AckResp {
     ctx.connected = None;
+    ctx.flashing = false;
     Ok(())
 }
 
@@ -101,6 +107,7 @@ async fn run(ctx: &mut Context, _hdr: VarHeader, _req: ()) -> AckResp {
     let esc = ctx.esc()?;
     let result = esc.run().await.map(|_| ()).map_err(EscError::from);
     ctx.connected = None;
+    ctx.flashing = false;
     result
 }
 
@@ -131,19 +138,29 @@ async fn read(ctx: &mut Context, _hdr: VarHeader, req: ReadReq) -> BlockResp {
 }
 
 async fn flash_begin(ctx: &mut Context, _hdr: VarHeader, _req: ()) -> AckResp {
-    ctx.esc()?.begin_flash().await?;
-    Ok(())
+    let result = ctx.esc()?.begin_flash().await;
+    ctx.flashing = result.is_ok();
+    Ok(result?)
 }
 
 async fn flash_chunk(ctx: &mut Context, _hdr: VarHeader, req: ChunkReq) -> AckResp {
-    ctx.esc()?
+    if !ctx.flashing {
+        return Err(EscError::FlashSequence);
+    }
+    let result = ctx
+        .esc()?
         .write_firmware_chunk(req.offset as usize, &req.data)
-        .await?;
-    Ok(())
+        .await;
+    ctx.flashing = result.is_ok();
+    Ok(result?)
 }
 
 async fn flash_finish(ctx: &mut Context, _hdr: VarHeader, _req: ()) -> AckResp {
+    if !ctx.flashing {
+        return Err(EscError::FlashSequence);
+    }
     ctx.esc()?.finish_flash().await?;
+    ctx.flashing = false;
     Ok(())
 }
 

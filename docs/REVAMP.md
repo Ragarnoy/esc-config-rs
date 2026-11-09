@@ -373,14 +373,17 @@ As landed:
   | `esc/name` | `()` | 32 bytes |
   | `esc/read` | `{address, len ≤ 256}` | bytes |
   | `esc/flash/begin` | `()` | `()` (boot byte cleared) |
-  | `esc/flash/chunk` | `{offset, data ≤ 256}` | `()` (written and read back) |
-  | `esc/flash/finish` | `()` | `()` (boot byte set) |
+  | `esc/flash/chunk` | `{offset, data ≤ 256}` | `()` (written and read back; `FlashSequence` unless begin and every chunk since succeeded) |
+  | `esc/flash/finish` | `()` | `()` (boot byte set; same `FlashSequence` rule) |
   | `esc/flash/read` | `{offset, len ≤ 256}` | bytes |
 
 - **Host policy** lives in the CLI (`device.rs`, tested against an in-memory
   device): edits touch settings bytes 5..48 only, restore merges 5..192 and refuses
   another EEPROM layout version, a flash is begin / 256-byte chunks / finish and
-  leaves the boot byte cleared on error.
+  leaves the boot byte cleared on error, and an image must be built for the ESC's
+  app start. The relay enforces the flash order itself (no chunk or finish unless
+  begin and every chunk since succeeded), so no client can set the boot byte over
+  a half-written app.
 - Findings closed in Phase 3: F10 (one frame per `send`, no relay re-framing), F11
   and F15 (no byte sniffing, no USB aggregation), structural problems 2 (relay byte
   matching) and 5 (divider from `clk_sys_freq()`, checked at compile time for

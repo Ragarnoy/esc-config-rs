@@ -11,6 +11,7 @@
 
 use core::fmt;
 
+use esc_protocol::layout::Layout;
 use heapless::Vec;
 use postcard_rpc::{TopicDirection, endpoints, topics};
 use postcard_schema::Schema;
@@ -19,7 +20,10 @@ use serde::{Deserialize, Serialize};
 /// Bytes of the AM32 settings structure (config, melody, CAN, reserved).
 pub const EEPROM_SIZE: usize = 192;
 /// Largest read or write in one request.
-pub const MAX_BLOCK: usize = 256;
+pub const MAX_BLOCK: usize = esc_protocol::packet::MAX_BLOCK;
+
+/// USB VID:PID of the relay firmware (pid.codes test PID).
+pub const RELAY_USB_VID_PID: (u16, u16) = (0x1209, 0x0001);
 
 /// The settings structure, exactly [`EEPROM_SIZE`] bytes.
 pub type Eeprom = Vec<u8, EEPROM_SIZE>;
@@ -74,10 +78,25 @@ pub struct LayoutInfo {
     pub eeprom_start: u16,
 }
 
-impl LayoutInfo {
-    /// App start in bytes from the start of flash.
-    pub const fn firmware_byte_offset(&self) -> u32 {
-        (self.firmware_start as u32) << self.address_shift
+impl From<Layout> for LayoutInfo {
+    fn from(l: Layout) -> Self {
+        Self {
+            address_shift: l.address_shift,
+            firmware_start: l.firmware_start,
+            filename_start: l.filename_start,
+            eeprom_start: l.eeprom_start,
+        }
+    }
+}
+
+impl From<LayoutInfo> for Layout {
+    fn from(l: LayoutInfo) -> Self {
+        Self {
+            address_shift: l.address_shift,
+            firmware_start: l.firmware_start,
+            filename_start: l.filename_start,
+            eeprom_start: l.eeprom_start,
+        }
     }
 }
 
@@ -170,6 +189,9 @@ pub enum EscError {
         /// Byte offset from the app start.
         offset: u32,
     },
+    /// Flash requests out of order: a chunk without `flash/begin`, or
+    /// `flash/finish` after a failed chunk (the boot byte stays cleared).
+    FlashSequence,
 }
 
 impl fmt::Display for EscError {
@@ -210,6 +232,10 @@ impl fmt::Display for EscError {
             Self::Verify { offset } => {
                 write!(f, "flash verify failed at app offset 0x{offset:05X}")
             }
+            Self::FlashSequence => write!(
+                f,
+                "flash out of sequence: begin, then every chunk, then finish (boot byte left cleared)"
+            ),
         }
     }
 }
@@ -271,11 +297,10 @@ mod session {
     use esc_protocol::device::BootloaderType;
     use esc_session::{Error, Esc, Link};
 
-    use super::{DeviceKind, EscError, EscInfo, LayoutInfo};
+    use super::{DeviceKind, EscError, EscInfo};
 
-    // The ICD restates these so it builds without the session; keep them in step.
+    // The ICD restates this so it builds without the session; keep them in step.
     const _: () = assert!(super::EEPROM_SIZE == esc_session::EEPROM_SIZE);
-    const _: () = assert!(super::MAX_BLOCK == esc_protocol::packet::MAX_BLOCK);
 
     fn len16(n: usize) -> u16 {
         u16::try_from(n).unwrap_or(u16::MAX)
@@ -325,18 +350,12 @@ mod session {
         /// Describe a connected session.
         pub fn of<L: Link>(esc: &Esc<L>) -> Self {
             let reply = esc.connect_reply();
-            let l = esc.layout();
             Self {
                 device_id: reply.device_id,
                 pin_code: reply.pin_code,
                 flash_code: reply.flash_code,
                 protocol_version: reply.protocol_version,
-                layout: LayoutInfo {
-                    address_shift: l.address_shift,
-                    firmware_start: l.firmware_start,
-                    filename_start: l.filename_start,
-                    eeprom_start: l.eeprom_start,
-                },
+                layout: (*esc.layout()).into(),
                 max_firmware_size: len32(esc.max_firmware_size()),
             }
         }
@@ -415,8 +434,10 @@ mod tests {
     }
 
     #[test]
-    fn layout_byte_offset() {
-        assert_eq!(info().layout.firmware_byte_offset(), 0x1000);
+    fn layout_converts_both_ways() {
+        let layout = Layout::from(info().layout);
+        assert_eq!(layout.firmware_byte_offset(), 0x1000);
+        assert_eq!(LayoutInfo::from(layout), info().layout);
     }
 
     #[cfg(feature = "session")]

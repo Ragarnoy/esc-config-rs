@@ -60,7 +60,8 @@ async fn main(spawner: Spawner) {
 
     // USB CDC-ACM.
     let driver = Driver::new(p.USB, Irqs);
-    let mut config = Config::new(0x1209, 0x0001);
+    let (vid, pid) = esc_config_icd::RELAY_USB_VID_PID;
+    let mut config = Config::new(vid, pid);
     config.manufacturer = Some("esc-config-rs");
     config.product = Some("ESC Relay (ICD)");
     config.serial_number = Some("001");
@@ -96,6 +97,7 @@ async fn main(spawner: Spawner) {
         Context {
             uart,
             connected: None,
+            flashing: false,
         },
         NoSpawn,
     );

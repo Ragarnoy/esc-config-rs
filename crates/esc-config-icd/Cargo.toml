@@ -8,7 +8,7 @@ description = "Typed operations for configuring AM32 ESCs over postcard-rpc (rel
 [features]
 default = []
 # Conversions from esc-session types (for servers that run the session).
-session = ["dep:esc-session", "dep:esc-protocol"]
+session = ["dep:esc-session"]
 use-std = ["postcard/use-std", "postcard-rpc/use-std", "postcard-schema/use-std", "serde/std"]
 
 [dependencies]
@@ -18,8 +18,7 @@ postcard-schema.workspace = true
 heapless.workspace = true
 serde.workspace = true
 esc-session = { path = "../esc-session", optional = true }
-esc-protocol = { path = "../esc-protocol", optional = true }
+esc-protocol = { path = "../esc-protocol" }
 
 [dev-dependencies]
 esc-session = { path = "../esc-session" }
-esc-protocol = { path = "../esc-protocol" }

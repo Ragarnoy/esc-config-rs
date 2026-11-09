@@ -33,6 +33,14 @@ fn format_device(info: DeviceInfo) -> String {
     format!("{} (0x{:04X})", firmware_name, info.device_id)
 }
 
+/// Connect to the ESC through the relay on `device`, saying so.
+fn connect(device: &str) -> Result<Relay> {
+    println!("Connecting to ESC via {device}...");
+    let relay = Relay::connect(device)?;
+    println!("Connected: {}", format_device(relay.device()));
+    Ok(relay)
+}
+
 // =============================================================================
 // Interactive Configuration Mode
 // =============================================================================
@@ -71,12 +79,7 @@ pub fn interactive_config(device: Option<&str>) -> Result<()> {
     };
 
     // Initial connection to read config
-    println!("Connecting to ESC via {}...", device);
-
-    let mut relay = Relay::connect(&device)?;
-
-    let device_info = relay.device();
-    println!("Connected: {}", format_device(device_info));
+    let mut relay = connect(&device)?;
 
     if let Ok(name) = relay.read_esc_name()
         && !name.is_empty()
@@ -739,16 +742,11 @@ fn edit_single_setting(config: &mut Am32Config, setting: Setting, name: &str) ->
 
 /// Read the ESC's identity, layout and EEPROM and display them.
 pub fn read_config(device: &str, output: Option<&str>) -> Result<()> {
-    println!("Connecting to ESC via {device}...");
-
-    let mut relay = Relay::connect(device)?;
-
-    let device_info = relay.device();
-    println!("Connected: {}", format_device(device_info));
+    let mut relay = connect(device)?;
 
     let layout = relay.layout();
-    println!("  Pin code:          0x{:02X}", device_info.pin_code());
-    println!("  Flash code:        0x{:02X}", device_info.flash_code());
+    println!("  Pin code:          0x{:02X}", relay.info().pin_code);
+    println!("  Flash code:        0x{:02X}", relay.info().flash_code);
     println!("  Bootloader proto:  {}", relay.info().protocol_version);
     println!(
         "  Layout (protocol units, shift {}): app 0x{:04X}, name 0x{:04X}, EEPROM 0x{:04X}",
@@ -798,18 +796,6 @@ fn load_image(hex_file: &str) -> Result<(Vec<u8>, u32)> {
         min
     );
     Ok((image, min.checked_sub(FLASH_BASE).unwrap_or(min)))
-}
-
-/// Refuse an image that does not start at this ESC's app start.
-fn check_image_start(relay: &Relay, offset: u32) -> Result<()> {
-    let expected = relay.layout().firmware_byte_offset();
-    if offset != expected {
-        bail!(
-            "firmware starts at app offset 0x{offset:X}, but this ESC's bootloader expects \
-             0x{expected:X} (DroneCAN bootloaders use 0x4000, others 0x1000)"
-        );
-    }
-    Ok(())
 }
 
 /// Refuse a hex file whose name names a different MCU than the ESC's firmware.
@@ -863,11 +849,8 @@ fn byte_progress_bar(len: usize) -> indicatif::ProgressBar {
 pub fn flash_firmware(device: &str, hex_file: &str) -> Result<()> {
     let (image, offset) = load_image(hex_file)?;
 
-    println!("\nConnecting to ESC via {device}...");
-    let mut relay = Relay::connect(device)?;
-    println!("Connected: {}", format_device(relay.device()));
+    let mut relay = connect(device)?;
 
-    check_image_start(&relay, offset)?;
     check_mcu_name(&mut relay, hex_file)?;
 
     println!(
@@ -875,7 +858,7 @@ pub fn flash_firmware(device: &str, hex_file: &str) -> Result<()> {
         image.len()
     );
     let pb = byte_progress_bar(image.len());
-    let result = relay.flash_firmware(&image, |done, _| pb.set_position(done as u64));
+    let result = relay.flash_firmware(&image, offset, |done, _| pb.set_position(done as u64));
     match result {
         Ok(()) => pb.finish_with_message("done"),
         Err(e) => {
@@ -898,14 +881,11 @@ pub fn flash_firmware(device: &str, hex_file: &str) -> Result<()> {
 pub fn verify_firmware(device: &str, hex_file: &str) -> Result<()> {
     let (image, offset) = load_image(hex_file)?;
 
-    println!("\nConnecting to ESC via {device}...");
-    let mut relay = Relay::connect(device)?;
-    println!("Connected: {}", format_device(relay.device()));
-    check_image_start(&relay, offset)?;
+    let mut relay = connect(device)?;
 
     println!("\nVerifying {} bytes...", image.len());
     let pb = byte_progress_bar(image.len());
-    let result = relay.verify_firmware(&image, |done, _| pb.set_position(done as u64));
+    let result = relay.verify_firmware(&image, offset, |done, _| pb.set_position(done as u64));
     pb.finish();
     result?;
 
@@ -915,9 +895,7 @@ pub fn verify_firmware(device: &str, hex_file: &str) -> Result<()> {
 
 /// Leave the bootloader and start the ESC firmware.
 pub fn run_firmware(device: &str) -> Result<()> {
-    println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::connect(device)?;
-    println!("Connected: {}", format_device(relay.device()));
+    let mut relay = connect(device)?;
 
     let config = relay.read_settings()?;
     if !config.is_bootable() {
@@ -934,11 +912,7 @@ pub fn run_firmware(device: &str) -> Result<()> {
 
 /// Backup ESC configuration to file (256 bytes at the EEPROM base).
 pub fn backup_config(device: &str, output: &str) -> Result<()> {
-    println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::connect(device)?;
-
-    let device_info = relay.device();
-    println!("Connected: {}", format_device(device_info));
+    let mut relay = connect(device)?;
 
     println!("Reading configuration...");
     let eeprom = relay.read_eeprom_256()?;
@@ -961,9 +935,7 @@ pub fn restore_config(device: &str, input: &str) -> Result<()> {
     }
     let data = fs::read(input).with_context(|| format!("failed to read {input}"))?;
 
-    println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::connect(device)?;
-    println!("Connected: {}", format_device(relay.device()));
+    let mut relay = connect(device)?;
 
     println!("Writing configuration...");
     relay.restore(&data)?;
@@ -975,18 +947,10 @@ pub fn restore_config(device: &str, input: &str) -> Result<()> {
 
 /// Export ESC configuration as TOML (AM32 only).
 pub fn export_config(device: &str, output: &str) -> Result<()> {
-    println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::connect(device)?;
-
-    let device_info = relay.device();
-    println!("Connected: {}", format_device(device_info));
+    let mut relay = connect(device)?;
 
     println!("Reading configuration...");
-    let config_block = relay.read_settings()?;
-
-    let mut raw = [0u8; 256];
-    raw.copy_from_slice(config_block.as_bytes());
-    let config = Am32Config::from_bytes(raw);
+    let config = relay.read_settings()?;
     let data = Am32ConfigData::from(&config);
 
     let toml_string =
@@ -1013,11 +977,7 @@ pub fn import_config(device: &str, input: &str) -> Result<()> {
 
     let config = Am32Config::from(&data);
 
-    println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::connect(device)?;
-
-    let device_info = relay.device();
-    println!("Connected: {}", format_device(device_info));
+    let mut relay = connect(device)?;
 
     println!("Writing settings (melody, CAN and version bytes are kept)...");
     relay.update_settings(&config)?;
@@ -1109,20 +1069,10 @@ fn print_firmware_info(firmware: &Firmware) {
 
 /// Show parsed ESC configuration (human-readable).
 pub fn show_config(device: &str) -> Result<()> {
-    println!("Connecting to ESC via {device}...");
-
-    let mut relay = Relay::connect(device)?;
-
-    let device_info = relay.device();
-    println!("Connected: {}", format_device(device_info));
+    let mut relay = connect(device)?;
 
     println!("Reading configuration...");
-    let config_block = relay.read_settings()?;
-
-    // Parse as AM32 config
-    let mut raw = [0u8; 256];
-    raw.copy_from_slice(config_block.as_bytes());
-    let config = Am32Config::from_bytes(raw);
+    let config = relay.read_settings()?;
 
     // Display parsed config
     println!();
@@ -1139,12 +1089,7 @@ pub fn set_config(device: &str, setting_name: &str, value: &str) -> Result<()> {
             "Unknown setting: {setting_name}\nRun 'esc-configurator settings' to see available options."
         ))?;
 
-    println!("Connecting to ESC via {device}...");
-
-    let mut relay = Relay::connect(device)?;
-
-    let device_info = relay.device();
-    println!("Connected: {}", format_device(device_info));
+    let mut relay = connect(device)?;
 
     // Read current config
     println!("Reading current configuration...");
@@ -1215,12 +1160,7 @@ pub fn list_settings() {
 /// Read-modify-write: boot byte, melody, CAN settings and firmware version bytes
 /// are kept, and the EEPROM layout version is raised to current.
 pub fn reset_defaults(device: &str) -> Result<()> {
-    println!("Connecting to ESC via {device}...");
-
-    let mut relay = Relay::connect(device)?;
-
-    let device_info = relay.device();
-    println!("Connected: {}", format_device(device_info));
+    let mut relay = connect(device)?;
 
     let mut config = relay.read_settings()?;
     config.apply_defaults();
@@ -1288,11 +1228,7 @@ fn print_hex_dump(data: &[u8]) {
 
 /// Download melody from ESC to file.
 pub fn melody_download(device: &str, output: &str) -> Result<()> {
-    println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::connect(device)?;
-
-    let device_info = relay.device();
-    println!("Connected: {}", format_device(device_info));
+    let mut relay = connect(device)?;
 
     println!("Reading melody data...");
     let data = relay.read_melody()?;
@@ -1363,11 +1299,7 @@ pub fn melody_upload(device: &str, input: &str) -> Result<()> {
         buf
     };
 
-    println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::connect(device)?;
-
-    let device_info = relay.device();
-    println!("Connected: {}", format_device(device_info));
+    let mut relay = connect(device)?;
 
     println!("Writing melody data...");
     relay.write_melody(&melody_data)?;
@@ -1378,11 +1310,7 @@ pub fn melody_upload(device: &str, input: &str) -> Result<()> {
 
 /// Clear melody from ESC.
 pub fn melody_clear(device: &str) -> Result<()> {
-    println!("Connecting to ESC via {device}...");
-    let mut relay = Relay::connect(device)?;
-
-    let device_info = relay.device();
-    println!("Connected: {}", format_device(device_info));
+    let mut relay = connect(device)?;
 
     println!("Clearing melody...");
     let empty = esc_protocol::Melody::clear_bytes();

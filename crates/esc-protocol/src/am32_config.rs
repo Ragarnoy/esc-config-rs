@@ -391,7 +391,7 @@ impl Am32Config {
     }
 
     // =========================================================================
-    // Safety Bit Handling
+    // Boot byte (`esc_session::Esc::begin_flash` / `finish_flash` own it)
     // =========================================================================
 
     /// Boot byte value that enables ESC booting.
@@ -427,30 +427,7 @@ impl Am32Config {
         }
     }
 
-    /// Clear the boot byte (set to 0x00) to prevent booting.
-    ///
-    /// **SAFETY:** Call this before flashing firmware to ensure the ESC
-    /// won't try to boot corrupted firmware if the flash fails.
-    ///
-    /// Returns the previous boot byte value for restoration.
-    pub const fn clear_boot_byte(&mut self) -> u8 {
-        let previous = self.boot_byte();
-        self.raw[offsets::BOOT_BYTE] = Self::BOOT_BYTE_DISABLED;
-        previous
-    }
-
-    /// Restore the boot byte (set to 0x01) to enable booting.
-    ///
-    /// **SAFETY:** Call this after successful firmware flash to allow
-    /// the ESC to boot.
-    pub const fn restore_boot_byte(&mut self) {
-        self.raw[offsets::BOOT_BYTE] = Self::BOOT_BYTE_ENABLED;
-    }
-
-    /// Get the first 48 bytes of the EEPROM (the configurable region).
-    ///
-    /// This is the region that contains the boot byte and all config settings.
-    /// Used for safety bit handling during firmware flashing.
+    /// Get the first 48 bytes of the EEPROM (boot byte, versions and settings).
     pub fn eeprom_bytes(&self) -> &[u8] {
         &self.raw[0..48]
     }
@@ -2196,24 +2173,6 @@ direction_reversed = true
     }
 
     #[test]
-    fn clear_and_restore_boot_byte() {
-        let mut config = Am32Config::from_bytes([0; 256]);
-        config.set_boot_byte(0x01);
-        assert!(config.is_bootable());
-
-        // Clear should return previous value and set to 0
-        let previous = config.clear_boot_byte();
-        assert_eq!(previous, 0x01);
-        assert_eq!(config.boot_byte(), 0x00);
-        assert!(!config.is_bootable());
-
-        // Restore should set to 1
-        config.restore_boot_byte();
-        assert_eq!(config.boot_byte(), 0x01);
-        assert!(config.is_bootable());
-    }
-
-    #[test]
     fn eeprom_bytes_access() {
         let mut raw = [0xAAu8; 256];
         raw[0] = 0x01; // boot byte
@@ -2312,8 +2271,8 @@ direction_reversed = true
         assert_eq!(config.boot_status(), BootStatus::StuckInBootloader);
         assert!(config.boot_status().needs_recovery());
 
-        // Recovery: restore boot byte
-        config.restore_boot_byte();
+        // Recovery (what a finished flash does): set the boot byte
+        config.set_boot_byte(Am32Config::BOOT_BYTE_ENABLED);
 
         // Now bootable
         assert_eq!(config.boot_status(), BootStatus::Bootable);
