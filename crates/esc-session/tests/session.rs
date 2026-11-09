@@ -168,8 +168,9 @@ fn lost_payload_ack_is_not_resent_as_a_command() {
     let mut block = [0u8; EEPROM_SIZE];
     block.copy_from_slice(&fake.flash[0x7C00..0x7C00 + EEPROM_SIZE]);
     block[7] = 55;
-    // Replies: connect (1), devinfo (2, 3), then Set Address (4), payload (5).
-    fake.drop_reply_number = Some(5);
+    // Replies: connect (1), devinfo (2, 3), boot-byte guard read (4, 5), then
+    // Set Address (6), payload (7).
+    fake.drop_reply_number = Some(7);
     let mut esc = connect(fake);
     block_on(esc.write_eeprom(&block)).unwrap();
     let fake = esc.into_link();
@@ -251,9 +252,10 @@ fn lost_prog_flash_ack_is_retried() {
     let mut block = [0u8; EEPROM_SIZE];
     block.copy_from_slice(&fake.flash[0x7C00..0x7C00 + EEPROM_SIZE]);
     block[6] = 77;
-    // Replies: connect (1), devinfo Set Address (2) and read (3), then the write's
-    // Set Address (4), payload (5) and Prog Flash (6).
-    fake.drop_reply_number = Some(6);
+    // Replies: connect (1), devinfo Set Address (2) and read (3), the boot-byte
+    // guard's read (4, 5), then the write's Set Address (6), payload (7) and
+    // Prog Flash (8).
+    fake.drop_reply_number = Some(8);
     let mut esc = connect(fake);
     block_on(esc.write_eeprom(&block)).unwrap();
     assert_eq!(esc.into_link().eeprom()[6], 77);
@@ -447,4 +449,31 @@ fn failed_connect_leaves_the_link_with_the_caller() {
     assert!(block_on(Esc::connect(&mut fake)).is_err());
     // Same link, second try.
     block_on(Esc::connect(&mut fake)).unwrap();
+}
+
+#[test]
+fn settings_write_cannot_enable_boot() {
+    // After a failed flash the boot byte is 0x00. A settings write carrying 0x01
+    // (settings read before the flash) would let the bootloader start a
+    // half-written app: refused. Keeping 0x00 is fine; finish_flash sets it.
+    let mut esc = connect(FakeEsc::new(Mcu::F051));
+    let mut stale = esc_eeprom(&mut esc);
+    assert_eq!(stale[0], 0x01);
+    block_on(esc.begin_flash()).unwrap();
+
+    stale[9] = 42;
+    assert_eq!(
+        block_on(esc.write_eeprom(&stale)),
+        Err(Error::WouldEnableBoot)
+    );
+    let mut current = esc_eeprom(&mut esc);
+    assert_eq!((current[0], current[9]), (0x00, 9), "nothing written");
+
+    current[9] = 42;
+    block_on(esc.write_eeprom(&current)).unwrap();
+    block_on(esc.finish_flash()).unwrap();
+    let after = esc_eeprom(&mut esc);
+    assert_eq!((after[0], after[9]), (0x01, 42));
+    // Bootable ESC: a write that keeps 0x01 goes through.
+    block_on(esc.write_eeprom(&after)).unwrap();
 }

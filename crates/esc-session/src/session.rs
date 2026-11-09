@@ -25,6 +25,8 @@ pub const WRITE_ALIGN: usize = 8;
 
 /// EEPROM byte 0: the bootloader starts the app only when it is `0x01`.
 const BOOT_BYTE: usize = 0;
+/// Boot byte value that lets the bootloader start the app.
+const BOOT_ENABLED: u8 = 0x01;
 
 /// Timeouts and retry counts. The defaults are for a direct wire to the ESC; a link
 /// with its own latency (USB to a relay) should add to them.
@@ -213,8 +215,17 @@ impl<L: Link> Esc<L> {
     /// The whole structure goes in one write, because writing at the EEPROM base
     /// erases the page: config, melody and CAN settings must travel together. The
     /// bootloader replaces byte 2 with its own version. Byte 0 must be `0x01` for
-    /// the ESC to boot its app.
+    /// the ESC to boot its app, and this write never makes it so: if the ESC's
+    /// byte 0 is not `0x01` (a flash failed or has not finished), writing `0x01`
+    /// there is refused with [`Error::WouldEnableBoot`]; only
+    /// [`Self::finish_flash`] sets it. That guard costs one 192-byte read.
     pub async fn write_eeprom(&mut self, data: &[u8; EEPROM_SIZE]) -> Result<(), L> {
+        if data[BOOT_BYTE] == BOOT_ENABLED {
+            let current = self.read_eeprom().await?;
+            if current[BOOT_BYTE] != BOOT_ENABLED {
+                return Err(Error::WouldEnableBoot);
+            }
+        }
         self.write_at(self.layout.eeprom_start, data).await
     }
 
@@ -315,14 +326,14 @@ impl<L: Link> Esc<L> {
 
     /// End a flash: set EEPROM byte 0 to `0x01` so the bootloader starts the app.
     pub async fn finish_flash(&mut self) -> Result<(), L> {
-        self.set_boot_byte(0x01).await
+        self.set_boot_byte(BOOT_ENABLED).await
     }
 
     async fn set_boot_byte(&mut self, value: u8) -> Result<(), L> {
         let mut eeprom = self.read_eeprom().await?;
         if eeprom[BOOT_BYTE] != value {
             eeprom[BOOT_BYTE] = value;
-            self.write_eeprom(&eeprom).await?;
+            self.write_at(self.layout.eeprom_start, &eeprom).await?;
         }
         Ok(())
     }

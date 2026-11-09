@@ -190,8 +190,8 @@ pub enum EscError {
         offset: u32,
     },
     /// Flash requests out of order: a chunk without `flash/begin`, `flash/finish`
-    /// after a failed chunk, or an `eeprom/write` setting the boot byte while a
-    /// flash is unfinished (the boot byte stays cleared).
+    /// after a failed chunk, or an `eeprom/write` that would set a cleared boot
+    /// byte (only `flash/finish` does that).
     FlashSequence,
 }
 
@@ -343,6 +343,7 @@ mod session {
                 Error::Verify { offset } => Self::Verify {
                     offset: len32(offset),
                 },
+                Error::WouldEnableBoot => Self::FlashSequence,
             }
         }
     }

@@ -45,6 +45,10 @@ pub enum Error<E> {
         /// Byte offset of the first differing chunk.
         offset: usize,
     },
+    /// An EEPROM write would set the boot byte (byte 0) to `0x01` on an ESC whose
+    /// boot byte is not `0x01`, e.g. after a failed flash. Only
+    /// [`crate::Esc::finish_flash`] may do that.
+    WouldEnableBoot,
 }
 
 impl<E> From<E> for Error<E> {
@@ -92,6 +96,10 @@ impl<E: fmt::Display> fmt::Display for Error<E> {
             Self::Verify { offset } => {
                 write!(f, "flash verify failed at app offset 0x{offset:05X}")
             }
+            Self::WouldEnableBoot => write!(
+                f,
+                "settings write would set the boot byte; only a finished flash does that"
+            ),
         }
     }
 }
