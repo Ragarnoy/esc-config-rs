@@ -429,8 +429,20 @@ pub fn edit_direction_setting(current_reversed: bool) -> Result<Option<bool>> {
 
 /// Edit motor timing setting.
 pub fn edit_timing_setting(current: MotorTiming) -> Result<Option<MotorTiming>> {
+    const CHOICES: [MotorTiming; 5] = [
+        MotorTiming::Deg0,
+        MotorTiming::Deg7_5,
+        MotorTiming::Deg15,
+        MotorTiming::Deg22_5,
+        MotorTiming::Deg30,
+    ];
     let items = ["0°", "7.5°", "15°", "22.5°", "30°"];
-    let default_idx = current as usize;
+    // The nearest choice (AM32 stores timing in 0.9375° steps).
+    let default_idx = CHOICES
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, c)| c.steps().abs_diff(current.steps()))
+        .map_or(0, |(i, _)| i);
 
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("Motor Timing (current: {})", current))
@@ -438,7 +450,7 @@ pub fn edit_timing_setting(current: MotorTiming) -> Result<Option<MotorTiming>> 
         .default(default_idx)
         .interact_opt()?;
 
-    Ok(selection.map(|i| MotorTiming::from_byte(i as u8)))
+    Ok(selection.map(|i| CHOICES[i]))
 }
 
 /// Edit a numeric u8 setting with validation.
