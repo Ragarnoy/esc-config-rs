@@ -1013,8 +1013,6 @@ pub fn import_config(device: &str, input: &str) -> Result<()> {
     let data: Am32ConfigData = toml::from_str(&toml_string)
         .with_context(|| format!("failed to parse TOML from {input}"))?;
 
-    let config = Am32Config::try_from_data(&data).map_err(|e| anyhow!("{input}: {e}"))?;
-
     println!("Connecting to ESC via {device}...");
     let mut relay = Relay::connect(device)?;
 
@@ -1022,7 +1020,10 @@ pub fn import_config(device: &str, input: &str) -> Result<()> {
     println!("Connected: {}", format_device(device_info));
 
     println!("Writing settings (melody, CAN and version bytes are kept)...");
-    relay.update_settings(&config)?;
+    // Checked against this ESC's firmware, not the file's.
+    relay
+        .import_settings(&data)
+        .map_err(|e| anyhow!("{input}: {e:#}"))?;
 
     println!("Configuration imported from: {input}");
 
