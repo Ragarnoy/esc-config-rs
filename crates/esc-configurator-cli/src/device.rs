@@ -12,9 +12,7 @@ use esc_protocol::device::{DeviceInfo, classify_device};
 use esc_protocol::layout::Layout;
 use esc_protocol::melody::MELODY_OFFSET;
 
-/// Settings bytes of the AM32 EEPROM: after boot byte and version bytes (0..5),
-/// before the melody (48..176).
-pub const SETTINGS: std::ops::Range<usize> = 5..MELODY_OFFSET;
+use esc_protocol::policy;
 
 /// One ESC operation per method; each runs to completion on the server.
 pub trait EscDevice {
@@ -117,32 +115,30 @@ impl<D: EscDevice> Session<D> {
     /// so an edit made from an older read cannot undo a melody upload, and the
     /// firmware does not see a version change.
     pub fn update_settings(&mut self, edited: &Am32Config) -> Result<()> {
-        let mut current = self.read_settings()?;
-        current.as_bytes_mut()[SETTINGS].copy_from_slice(&edited.as_bytes()[SETTINGS]);
-        self.write_settings(&current)
+        let mut block = self
+            .device
+            .read_eeprom()
+            .context("failed to read settings")?;
+        let mut edited_block = [0u8; EEPROM_SIZE];
+        edited_block.copy_from_slice(&edited.as_bytes()[..EEPROM_SIZE]);
+        policy::merge_settings(&mut block, &edited_block);
+        self.device
+            .write_eeprom(&block)
+            .context("failed to write settings")
     }
 
     /// Restore a backup (256 or 192 bytes): bytes 5..192 from the backup, boot and
     /// version bytes from the ESC. Refuses a backup with another EEPROM layout
     /// version.
     pub fn restore(&mut self, backup: &[u8]) -> Result<()> {
-        if backup.len() != 256 && backup.len() != EEPROM_SIZE {
-            bail!(
-                "invalid backup file: expected 256 or {EEPROM_SIZE} bytes, got {}",
-                backup.len()
-            );
-        }
-        let mut config = self.read_settings()?;
-        let current = config.as_bytes()[1];
-        if backup[1] != current {
-            bail!(
-                "backup has EEPROM layout version {} but the ESC has {current}; \
-                 restore it on matching firmware, or use export/import (TOML)",
-                backup[1]
-            );
-        }
-        config.as_bytes_mut()[5..EEPROM_SIZE].copy_from_slice(&backup[5..EEPROM_SIZE]);
-        self.write_settings(&config)
+        let mut block = self
+            .device
+            .read_eeprom()
+            .context("failed to read settings")?;
+        policy::merge_restore(&mut block, backup).map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.device
+            .write_eeprom(&block)
+            .context("failed to write settings")
     }
 
     /// Read 256 bytes at the EEPROM base (the backup file format).
@@ -163,9 +159,14 @@ impl<D: EscDevice> Session<D> {
 
     /// Replace the melody, keeping every other setting (read-modify-write).
     pub fn write_melody(&mut self, melody: &[u8; 128]) -> Result<()> {
-        let mut config = self.read_settings()?;
-        config.as_bytes_mut()[MELODY_OFFSET..MELODY_OFFSET + 128].copy_from_slice(melody);
-        self.write_settings(&config)
+        let mut block = self
+            .device
+            .read_eeprom()
+            .context("failed to read settings")?;
+        policy::merge_melody(&mut block, melody);
+        self.device
+            .write_eeprom(&block)
+            .context("failed to write settings")
     }
 
     /// Flash an app image: clear the boot byte, write 256-byte chunks in order

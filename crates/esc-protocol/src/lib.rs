@@ -24,6 +24,7 @@ pub mod device;
 pub mod ihex;
 pub mod layout;
 pub mod packet;
+pub mod policy;
 
 pub use crc::{crc16_ibm, crc16_ibm_bytes};
 #[cfg(feature = "std")]
