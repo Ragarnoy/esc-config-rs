@@ -14,43 +14,170 @@ pub struct Am32Config {
     raw: [u8; 256],
 }
 
-/// Motor timing advance options (degrees)
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum MotorTiming {
-    #[default]
-    Deg0 = 0,
-    Deg7_5 = 1,
-    Deg15 = 2,
-    Deg22_5 = 3,
-    Deg30 = 4,
+/// Error for a timing value firmware with EEPROM version 2 or below can't store.
+pub const OLD_FIRMWARE_TIMING: &str = "this firmware (EEPROM version below 3, AM32 up to 2.18) only takes timing 0, 7.5, 15 or 22.5 degrees";
+
+/// Motor timing advance, in AM32's units of 60/64 = 0.9375 electrical degrees
+/// (0 to 32 steps, 0° to 30°).
+///
+/// AM32 stores it at `advance_level` in one of two encodings:
+///
+/// - **old**: `0..=3`, each step 7.5° (`raw << 3`). The only one firmware up to
+///   v2.18 (EEPROM version 2 and below) reads: its `loadEEpromSettings()` runs any
+///   other byte as 2 (15°).
+/// - **new**, from v2.19 (EEPROM version 3): `10..=42`, `raw - 10` steps of
+///   0.9375°. That firmware still reads the old form, and runs anything else
+///   (`4..=9`, `> 42`) as 16 steps (15°).
+///
+/// [`MotorTiming::from_byte`] decodes as v2.19 and later do,
+/// [`MotorTiming::from_byte_for`] for a given EEPROM version.
+/// [`Am32Config::timing_advance`] and [`Am32Config::set_timing_advance`] use the
+/// config's own EEPROM version.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct MotorTiming {
+    steps: u8,
 }
 
+#[allow(non_upper_case_globals)]
 impl MotorTiming {
-    pub const fn from_byte(b: u8) -> Self {
-        match b {
-            0 => Self::Deg0,
-            1 => Self::Deg7_5,
-            2 => Self::Deg15,
-            3 => Self::Deg22_5,
-            _ => Self::Deg30,
+    /// 0°.
+    pub const Deg0: Self = Self { steps: 0 };
+    /// 7.5°.
+    pub const Deg7_5: Self = Self { steps: 8 };
+    /// 15°.
+    pub const Deg15: Self = Self { steps: 16 };
+    /// 22.5°.
+    pub const Deg22_5: Self = Self { steps: 24 };
+    /// 30°.
+    pub const Deg30: Self = Self { steps: 32 };
+
+    /// Largest timing, in steps (30°).
+    pub const MAX_STEPS: u8 = 32;
+    /// Degrees per step.
+    pub const DEGREES_PER_STEP: f32 = 60.0 / 64.0;
+    /// What AM32 runs for an out-of-range byte.
+    const FALLBACK_STEPS: u8 = 16;
+
+    /// From steps of 0.9375°; `None` above [`Self::MAX_STEPS`].
+    pub const fn from_steps(steps: u8) -> Option<Self> {
+        if steps <= Self::MAX_STEPS {
+            Some(Self { steps })
+        } else {
+            None
         }
     }
 
-    pub const fn degrees(self) -> f32 {
-        match self {
-            Self::Deg0 => 0.0,
-            Self::Deg7_5 => 7.5,
-            Self::Deg15 => 15.0,
-            Self::Deg22_5 => 22.5,
-            Self::Deg30 => 30.0,
+    /// Nearest step to `degrees`; `None` outside 0..=30.
+    pub fn from_degrees(degrees: f32) -> Option<Self> {
+        if !(0.0..=30.0).contains(&degrees) {
+            return None;
         }
+        // Round half up without `f32::round` (no_std).
+        let steps = (degrees / Self::DEGREES_PER_STEP + 0.5) as u8;
+        Self::from_steps(steps.min(Self::MAX_STEPS))
+    }
+
+    /// First EEPROM version whose firmware reads the new `10..=42` form (v2.19).
+    pub const NEW_FORM_EEPROM_VERSION: u8 = 3;
+
+    /// Decode a stored `advance_level` byte for firmware with EEPROM version
+    /// `eeprom_version`, the way its `loadEEpromSettings()` does.
+    pub const fn from_byte_for(b: u8, eeprom_version: u8) -> Self {
+        if eeprom_version >= Self::NEW_FORM_EEPROM_VERSION {
+            Self::from_byte(b)
+        } else if b <= 3 {
+            Self { steps: b << 3 }
+        } else {
+            Self::Deg15
+        }
+    }
+
+    /// Decode a stored `advance_level` byte the way AM32 v2.19 and later
+    /// (EEPROM version 3) do.
+    pub const fn from_byte(b: u8) -> Self {
+        let steps = match b {
+            0..=3 => b << 3,
+            10..=42 => b - 10,
+            _ => Self::FALLBACK_STEPS,
+        };
+        Self { steps }
+    }
+
+    /// The new (10..=42) encoding.
+    pub const fn to_byte(self) -> u8 {
+        self.steps + 10
+    }
+
+    /// The old (0..=3) encoding, if this value has one: 0°, 7.5°, 15° or 22.5°.
+    pub const fn to_legacy_byte(self) -> Option<u8> {
+        if self.steps.is_multiple_of(8) && self.steps <= 24 {
+            Some(self.steps / 8)
+        } else {
+            None
+        }
+    }
+
+    /// Steps of 0.9375°.
+    pub const fn steps(self) -> u8 {
+        self.steps
+    }
+
+    pub const fn degrees(self) -> f32 {
+        self.steps as f32 * Self::DEGREES_PER_STEP
     }
 }
 
 impl fmt::Display for MotorTiming {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}°", self.degrees())
+    }
+}
+
+/// Serialized as degrees (a number). Also reads the strings older versions of
+/// this crate wrote (`"Deg15"`), except `"Deg30"`: that decoder reported 30° for
+/// every byte of 4 and above, so an old `Deg30` export doesn't say what the ESC
+/// had and is refused.
+#[cfg(feature = "serde")]
+impl serde::Serialize for MotorTiming {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_f32(self.degrees())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for MotorTiming {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl serde::de::Visitor<'_> for V {
+            type Value = MotorTiming;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("timing advance in degrees (0-30)")
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<MotorTiming, E> {
+                MotorTiming::from_degrees(v as f32)
+                    .ok_or_else(|| E::custom("timing advance must be 0-30 degrees"))
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<MotorTiming, E> {
+                self.visit_f64(v as f64)
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<MotorTiming, E> {
+                self.visit_f64(v as f64)
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<MotorTiming, E> {
+                match v {
+                    "Deg0" => Ok(MotorTiming::Deg0),
+                    "Deg7_5" => Ok(MotorTiming::Deg7_5),
+                    "Deg15" => Ok(MotorTiming::Deg15),
+                    "Deg22_5" => Ok(MotorTiming::Deg22_5),
+                    "Deg30" => Err(E::custom(
+                        "legacy timing \"Deg30\" is ambiguous (older versions showed every \
+                         stored value of 4 and above as 30°): give the timing in degrees",
+                    )),
+                    _ => Err(E::custom("expected timing advance in degrees (0-30)")),
+                }
+            }
+        }
+        d.deserialize_any(V)
     }
 }
 
@@ -337,7 +464,8 @@ impl Am32Config {
         config.set_complementary_pwm(false);
         config.set_variable_pwm_mode(VariablePwmMode::Fixed);
         config.set_stuck_rotor_protection(true);
-        config.set_timing_advance(MotorTiming::Deg22_5);
+        // 22.5° has an old form, so every EEPROM version takes it.
+        let _ = config.set_timing_advance(MotorTiming::Deg22_5);
         config.set_auto_timing(true);
         config.set_pwm_frequency_khz(24);
         config.set_startup_power(100);
@@ -642,12 +770,34 @@ impl Am32Config {
     }
 
     /// Motor timing advance.
+    ///
+    /// Decoded for this config's EEPROM version (see [`MotorTiming`]).
     pub const fn timing_advance(&self) -> MotorTiming {
-        MotorTiming::from_byte(self.raw[offsets::TIMING_ADVANCE])
+        MotorTiming::from_byte_for(self.raw[offsets::TIMING_ADVANCE], self.eeprom_version())
     }
 
-    pub const fn set_timing_advance(&mut self, timing: MotorTiming) {
-        self.raw[offsets::TIMING_ADVANCE] = timing as u8;
+    /// Set the timing for this config's firmware.
+    ///
+    /// - EEPROM version below 3 (up to v2.18): only the old form exists, so only
+    ///   0°, 7.5°, 15° and 22.5° can be written; any other value is an error,
+    ///   never rounded.
+    /// - EEPROM version 3 and above: a byte already in the old form stays in it
+    ///   when the value has one; anything else is written in the new form.
+    pub const fn set_timing_advance(&mut self, timing: MotorTiming) -> Result<(), &'static str> {
+        let legacy = timing.to_legacy_byte();
+        if self.eeprom_version() < MotorTiming::NEW_FORM_EEPROM_VERSION {
+            let Some(legacy) = legacy else {
+                return Err(OLD_FIRMWARE_TIMING);
+            };
+            self.raw[offsets::TIMING_ADVANCE] = legacy;
+            return Ok(());
+        }
+        let current = self.raw[offsets::TIMING_ADVANCE];
+        self.raw[offsets::TIMING_ADVANCE] = match (current, legacy) {
+            (0..=3, Some(legacy)) => legacy,
+            _ => timing.to_byte(),
+        };
+        Ok(())
     }
 
     /// PWM frequency in kHz.
@@ -1348,7 +1498,7 @@ impl Setting {
             Self::ComplementaryPwm => "Complementary PWM (on/off)",
             Self::VariablePwm => "Variable PWM mode (0=fixed, 1=var, 2=auto)",
             Self::StuckRotorProtection => "Stuck rotor protection (on/off)",
-            Self::TimingAdvance => "Motor timing (0-4: 0°/7.5°/15°/22.5°/30°)",
+            Self::TimingAdvance => "Motor timing in degrees (0-30, steps of 0.9375°)",
             Self::AutoTiming => "Auto timing adjustment (on/off)",
             Self::PwmFrequency => "PWM frequency in kHz (16-96)",
             Self::StartupPower => "Startup power percentage (50-150)",
@@ -1471,11 +1621,12 @@ pub fn apply_setting(
             config.set_stuck_rotor_protection(parse_bool(value).ok_or("expected on/off")?);
         }
         Setting::TimingAdvance => {
-            let v: u8 = value.parse().map_err(|_| "expected 0-4")?;
-            if v > 4 {
-                return Err("timing must be 0-4");
-            }
-            config.set_timing_advance(MotorTiming::from_byte(v));
+            let degrees: f32 = value
+                .trim_end_matches('°')
+                .parse()
+                .map_err(|_| "expected degrees (0-30)")?;
+            let timing = MotorTiming::from_degrees(degrees).ok_or("timing must be 0-30 degrees")?;
+            config.set_timing_advance(timing)?;
         }
         Setting::AutoTiming => {
             config.set_auto_timing(parse_bool(value).ok_or("expected on/off")?);
@@ -1845,6 +1996,19 @@ impl From<&Am32Config> for Am32ConfigData {
     }
 }
 
+impl Am32Config {
+    /// Like `From<&Am32ConfigData>`, but refuses a value this config's firmware
+    /// cannot store (timing on EEPROM version 2 and below) instead of storing the
+    /// nearest one.
+    pub fn try_from_data(data: &Am32ConfigData) -> Result<Self, &'static str> {
+        let config = Self::from(data);
+        if config.timing_advance() != data.timing_advance {
+            return Err(OLD_FIRMWARE_TIMING);
+        }
+        Ok(config)
+    }
+}
+
 impl From<&Am32ConfigData> for Am32Config {
     fn from(data: &Am32ConfigData) -> Self {
         let mut config = Am32Config::from_bytes([0u8; 256]);
@@ -1875,7 +2039,12 @@ impl From<&Am32ConfigData> for Am32Config {
         config.set_complementary_pwm(data.complementary_pwm);
         config.set_variable_pwm_mode(data.variable_pwm_mode);
         config.set_stuck_rotor_protection(data.stuck_rotor_protection);
-        config.set_timing_advance(data.timing_advance);
+        if config.set_timing_advance(data.timing_advance).is_err() {
+            // Old firmware, a value it can't store: the nearest one it can. Use
+            // `Am32Config::try_from_data` to refuse instead.
+            let legacy = (data.timing_advance.steps() + 4) / 8;
+            config.raw[offsets::TIMING_ADVANCE] = if legacy > 3 { 3 } else { legacy };
+        }
         config.set_auto_timing(data.auto_timing);
         config.set_pwm_frequency_khz(data.pwm_frequency_khz);
         config.set_startup_power(data.startup_power);
@@ -1920,6 +2089,153 @@ impl From<&Am32ConfigData> for Am32Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// AM32 `loadEEpromSettings()`: 0..=3 old (×8), 10..=42 new (−10), else 16.
+    #[test]
+    fn timing_decodes_like_am32() {
+        for b in 0..=3u8 {
+            assert_eq!(MotorTiming::from_byte(b).steps(), b << 3, "old byte {b}");
+        }
+        for b in 10..=42u8 {
+            assert_eq!(MotorTiming::from_byte(b).steps(), b - 10, "new byte {b}");
+        }
+        for b in (4..=9u8).chain(43..=255) {
+            assert_eq!(MotorTiming::from_byte(b).steps(), 16, "fallback byte {b}");
+        }
+        // The eagle's ESCs (AM32 2.20) store 26: 15°, which the old decoder showed as 30°.
+        assert_eq!(MotorTiming::from_byte(26), MotorTiming::Deg15);
+        assert_eq!(MotorTiming::from_byte(26).degrees(), 15.0);
+        assert_eq!(MotorTiming::from_byte(10), MotorTiming::Deg0);
+        assert_eq!(MotorTiming::from_byte(42), MotorTiming::Deg30);
+    }
+
+    #[test]
+    fn timing_degrees_round_to_steps() {
+        assert_eq!(
+            MotorTiming::from_degrees(18.75).map(MotorTiming::steps),
+            Some(20)
+        );
+        assert_eq!(
+            MotorTiming::from_degrees(18.8).map(MotorTiming::steps),
+            Some(20)
+        );
+        assert_eq!(MotorTiming::from_degrees(30.0), Some(MotorTiming::Deg30));
+        assert_eq!(MotorTiming::from_degrees(30.1), None);
+        assert_eq!(MotorTiming::from_degrees(-1.0), None);
+        assert_eq!(MotorTiming::from_steps(33), None);
+    }
+
+    /// A byte in the old form stays old where the value has one; otherwise new.
+    #[test]
+    fn timing_write_keeps_the_stored_encoding() {
+        let mut c = Am32Config::from_bytes([0; 256]);
+        c.raw[offsets::EEPROM_VERSION] = 3;
+        c.raw[offsets::TIMING_ADVANCE] = 2; // old 15°
+        c.set_timing_advance(MotorTiming::Deg22_5).unwrap();
+        assert_eq!(c.raw[offsets::TIMING_ADVANCE], 3);
+        c.set_timing_advance(MotorTiming::from_degrees(18.75).unwrap())
+            .unwrap();
+        assert_eq!(c.raw[offsets::TIMING_ADVANCE], 30);
+        // Now new form: stays new even for a value the old form has.
+        c.set_timing_advance(MotorTiming::Deg15).unwrap();
+        assert_eq!(c.raw[offsets::TIMING_ADVANCE], 26);
+        // 30° has no old form.
+        c.raw[offsets::TIMING_ADVANCE] = 0;
+        c.set_timing_advance(MotorTiming::Deg30).unwrap();
+        assert_eq!(c.raw[offsets::TIMING_ADVANCE], 42);
+        for version in [0u8, 1, 2, 3, 4] {
+            c.raw[offsets::EEPROM_VERSION] = version;
+            for b in 0..=255u8 {
+                c.raw[offsets::TIMING_ADVANCE] = b;
+                let t = c.timing_advance();
+                c.set_timing_advance(t).unwrap();
+                assert_eq!(
+                    c.timing_advance(),
+                    t,
+                    "version {version} byte {b} round trip"
+                );
+            }
+        }
+    }
+
+    /// AM32 up to v2.18 (EEPROM version 2) runs any byte above 3 as 15° and only
+    /// takes the old form: no new-form write, no rounding.
+    #[test]
+    fn timing_on_old_firmware() {
+        for b in 4..=255u8 {
+            assert_eq!(
+                MotorTiming::from_byte_for(b, 2),
+                MotorTiming::Deg15,
+                "byte {b}"
+            );
+        }
+        assert_eq!(MotorTiming::from_byte_for(30, 2), MotorTiming::Deg15);
+        assert_eq!(MotorTiming::from_byte_for(30, 3).steps(), 20);
+        assert_eq!(MotorTiming::from_byte_for(3, 2), MotorTiming::Deg22_5);
+
+        let mut c = Am32Config::from_bytes([0; 256]);
+        c.raw[offsets::EEPROM_VERSION] = 2;
+        c.raw[offsets::TIMING_ADVANCE] = 26; // runs as 15° on this firmware
+        assert_eq!(c.timing_advance(), MotorTiming::Deg15);
+        c.set_timing_advance(MotorTiming::Deg22_5).unwrap();
+        assert_eq!(c.raw[offsets::TIMING_ADVANCE], 3);
+        let before = c.raw;
+        assert!(
+            c.set_timing_advance(MotorTiming::from_degrees(18.75).unwrap())
+                .is_err()
+        );
+        assert!(c.set_timing_advance(MotorTiming::Deg30).is_err());
+        assert_eq!(c.raw, before, "a refused write leaves the block alone");
+        assert!(apply_setting(&mut c, Setting::TimingAdvance, "18.75").is_err());
+        apply_setting(&mut c, Setting::TimingAdvance, "7.5").unwrap();
+        assert_eq!(c.raw[offsets::TIMING_ADVANCE], 1);
+
+        let mut data = Am32ConfigData::from(&c);
+        data.timing_advance = MotorTiming::from_degrees(18.75).unwrap();
+        assert!(Am32Config::try_from_data(&data).is_err());
+        data.timing_advance = MotorTiming::Deg7_5;
+        assert_eq!(
+            Am32Config::try_from_data(&data).unwrap().timing_advance(),
+            MotorTiming::Deg7_5
+        );
+    }
+
+    #[test]
+    fn timing_setting_takes_degrees() {
+        let mut c = Am32Config::from_bytes([0; 256]);
+        c.raw[offsets::EEPROM_VERSION] = 3;
+        c.raw[offsets::TIMING_ADVANCE] = 26;
+        apply_setting(&mut c, Setting::TimingAdvance, "18.75").unwrap();
+        assert_eq!(c.timing_advance().steps(), 20);
+        apply_setting(&mut c, Setting::TimingAdvance, "15°").unwrap();
+        assert_eq!(c.timing_advance(), MotorTiming::Deg15);
+        assert!(apply_setting(&mut c, Setting::TimingAdvance, "31").is_err());
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn timing_serde() {
+        #[derive(serde::Deserialize, serde::Serialize)]
+        struct W {
+            t: MotorTiming,
+        }
+        let w: W = toml::from_str("t = 15").unwrap();
+        assert_eq!(w.t, MotorTiming::Deg15);
+        let w: W = toml::from_str("t = 18.75").unwrap();
+        assert_eq!(w.t.steps(), 20);
+        let w: W = toml::from_str("t = \"Deg22_5\"").unwrap();
+        assert_eq!(w.t, MotorTiming::Deg22_5);
+        assert!(toml::from_str::<W>("t = \"Deg30\"").is_err());
+        assert!(toml::from_str::<W>("t = 31").is_err());
+        let back: W = toml::from_str(
+            &toml::to_string(&W {
+                t: MotorTiming::Deg15,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(back.t, MotorTiming::Deg15);
+    }
 
     #[test]
     fn parse_config() {
@@ -1999,7 +2315,8 @@ mod tests {
         config.set_complementary_pwm(true);
         config.set_variable_pwm_mode(VariablePwmMode::Auto);
         config.set_stuck_rotor_protection(true);
-        config.set_timing_advance(MotorTiming::Deg22_5);
+        // 22.5° has an old form, so every EEPROM version takes it.
+        let _ = config.set_timing_advance(MotorTiming::Deg22_5);
         config.set_auto_timing(true);
         config.set_pwm_frequency_khz(48);
         config.set_startup_power(125);
@@ -2094,7 +2411,7 @@ mod tests {
         config.raw[offsets::FIRMWARE_MINOR] = 15;
         config.set_motor_kv(2200);
         config.set_motor_poles(14);
-        config.set_timing_advance(MotorTiming::Deg15);
+        config.set_timing_advance(MotorTiming::Deg15).unwrap();
         config.set_direction_reversed(true);
         config.set_bidirectional(true);
         config.set_brake_mode(BrakeMode::ActiveBrake);

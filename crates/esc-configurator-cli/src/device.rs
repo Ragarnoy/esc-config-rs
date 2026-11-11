@@ -7,7 +7,7 @@
 
 use anyhow::{Context, Result, bail};
 use esc_config_icd::{EEPROM_SIZE, EscInfo, MAX_BLOCK};
-use esc_protocol::am32_config::Am32Config;
+use esc_protocol::am32_config::{Am32Config, Am32ConfigData};
 use esc_protocol::device::{DeviceInfo, classify_device};
 use esc_protocol::layout::Layout;
 use esc_protocol::melody::MELODY_OFFSET;
@@ -119,6 +119,29 @@ impl<D: EscDevice> Session<D> {
             .device
             .read_eeprom()
             .context("failed to read settings")?;
+        let mut edited_block = [0u8; EEPROM_SIZE];
+        edited_block.copy_from_slice(&edited.as_bytes()[..EEPROM_SIZE]);
+        policy::merge_settings(&mut block, &edited_block);
+        self.device
+            .write_eeprom(&block)
+            .context("failed to write settings")
+    }
+
+    /// Import settings from a TOML export: as [`Self::update_settings`], but the
+    /// values are checked against this ESC's firmware (its EEPROM version), not
+    /// the file's, which may come from another firmware or leave it out. A value
+    /// the firmware can't store (timing on EEPROM version 2 and below) is refused
+    /// before anything is written.
+    pub fn import_settings(&mut self, data: &Am32ConfigData) -> Result<()> {
+        let mut block = self
+            .device
+            .read_eeprom()
+            .context("failed to read settings")?;
+        let mut raw = [0xFF; 256];
+        raw[..EEPROM_SIZE].copy_from_slice(&block);
+        let mut data = data.clone();
+        data.eeprom_version = Am32Config::from_bytes(raw).eeprom_version();
+        let edited = Am32Config::try_from_data(&data).map_err(|e| anyhow::anyhow!("{e}"))?;
         let mut edited_block = [0u8; EEPROM_SIZE];
         edited_block.copy_from_slice(&edited.as_bytes()[..EEPROM_SIZE]);
         policy::merge_settings(&mut block, &edited_block);
@@ -323,6 +346,38 @@ mod tests {
 
     fn session() -> Session<MockDevice> {
         Session::new(MockDevice::new()).unwrap()
+    }
+
+    /// The timing check uses the ESC's EEPROM version, not the file's.
+    #[test]
+    fn import_checks_timing_against_the_esc() {
+        use esc_protocol::am32_config::MotorTiming;
+        const TIMING: usize = 0x17;
+        let fine = MotorTiming::from_degrees(18.75).unwrap();
+
+        // File without a version (0), ESC on EEPROM version 4: 18.75° is fine.
+        let mut s = session();
+        let mut data = Am32ConfigData::from(&s.read_settings().unwrap());
+        data.eeprom_version = 0;
+        data.timing_advance = fine;
+        s.import_settings(&data).unwrap();
+        assert_eq!(s.device.eeprom[TIMING], 30, "new form on a version-4 ESC");
+
+        // File from version-3 firmware, ESC on version 2: refused, nothing written.
+        let mut s = session();
+        s.device.eeprom[1] = 2;
+        let before = s.device.eeprom;
+        let mut data = Am32ConfigData::from(&s.read_settings().unwrap());
+        data.eeprom_version = 3;
+        data.timing_advance = fine;
+        assert!(s.import_settings(&data).is_err());
+        assert_eq!(s.device.eeprom, before);
+
+        // A value the old firmware has: written in the old form.
+        data.timing_advance = MotorTiming::Deg22_5;
+        s.import_settings(&data).unwrap();
+        assert_eq!(s.device.eeprom[TIMING], 3);
+        assert_eq!(s.device.eeprom[1], 2, "the ESC's version is kept");
     }
 
     #[test]
