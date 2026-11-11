@@ -10,7 +10,7 @@
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use esc_protocol::am32_config::{Am32Config, Am32ConfigData, Setting, apply_setting};
 use esc_protocol::device::{DeviceInfo, FirmwareType};
 use esc_protocol::ihex::{Firmware, load_firmware};
@@ -455,7 +455,10 @@ fn edit_single_setting(config: &mut Am32Config, setting: Setting, name: &str) ->
         }
         Setting::TimingAdvance => {
             if let Some(value) = edit_timing_setting(config.timing_advance())? {
-                config.set_timing_advance(value);
+                if let Err(e) = config.set_timing_advance(value) {
+                    println!("Not set: {e}");
+                    return Ok(false);
+                }
                 println!(
                     "Set {} = {}",
                     name,
@@ -1010,7 +1013,7 @@ pub fn import_config(device: &str, input: &str) -> Result<()> {
     let data: Am32ConfigData = toml::from_str(&toml_string)
         .with_context(|| format!("failed to parse TOML from {input}"))?;
 
-    let config = Am32Config::from(&data);
+    let config = Am32Config::try_from_data(&data).map_err(|e| anyhow!("{input}: {e}"))?;
 
     println!("Connecting to ESC via {device}...");
     let mut relay = Relay::connect(device)?;

@@ -436,21 +436,32 @@ pub fn edit_timing_setting(current: MotorTiming) -> Result<Option<MotorTiming>> 
         MotorTiming::Deg22_5,
         MotorTiming::Deg30,
     ];
-    let items = ["0°", "7.5°", "15°", "22.5°", "30°"];
-    // The nearest choice (AM32 stores timing in 0.9375° steps).
-    let default_idx = CHOICES
+    // AM32 stores timing in 0.9375° steps: a current value that is none of the
+    // choices is offered as itself, and is the default, so accepting the default
+    // never changes the timing.
+    let mut choices = CHOICES.to_vec();
+    if !choices.contains(&current) {
+        choices.push(current);
+    }
+    let items: Vec<String> = choices
         .iter()
-        .enumerate()
-        .min_by_key(|(_, c)| c.steps().abs_diff(current.steps()))
-        .map_or(0, |(i, _)| i);
+        .map(|c| {
+            if *c == current {
+                format!("{c} (current)")
+            } else {
+                c.to_string()
+            }
+        })
+        .collect();
+    let default_idx = choices.iter().position(|c| *c == current).unwrap_or(0);
 
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("Motor Timing (current: {})", current))
-        .items(items)
+        .items(&items)
         .default(default_idx)
         .interact_opt()?;
 
-    Ok(selection.map(|i| CHOICES[i]))
+    Ok(selection.map(|i| choices[i]))
 }
 
 /// Edit a numeric u8 setting with validation.
