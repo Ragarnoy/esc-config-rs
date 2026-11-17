@@ -172,7 +172,11 @@ impl RtttlNote {
     /// Calculate duration in milliseconds given BPM.
     ///
     /// A whole note at 120 BPM = 2000ms (4 beats * 500ms per beat).
+    /// A tempo of 0 gives 0 ms (`Rtttl::parse` never yields it).
     pub const fn duration_ms(&self, bpm: u16) -> u32 {
+        if bpm == 0 {
+            return 0;
+        }
         // Whole note duration = 4 beats = 4 * (60000 / bpm) ms
         let whole_note_ms = 240_000u32 / (bpm as u32);
         let base_ms = whole_note_ms / (self.duration as u32);
@@ -190,7 +194,7 @@ impl RtttlNote {
 pub enum ParseError {
     /// Missing colon separator in header.
     MissingColon,
-    /// Invalid or missing settings section.
+    /// Invalid or missing settings section, or a tempo of `b=0`.
     InvalidSettings,
     /// Invalid note format.
     InvalidNote,
@@ -242,8 +246,11 @@ impl<'a> Rtttl<'a> {
                     default_octave = o;
                 }
             } else if let Some(val) = setting.strip_prefix("b=") {
-                if let Some(b) = parse_number_u16(val) {
-                    bpm = b;
+                match parse_number_u16(val) {
+                    // Every duration divides by the tempo.
+                    Some(0) => return Err(ParseError::InvalidSettings),
+                    Some(b) => bpm = b,
+                    None => {}
                 }
             }
         }
@@ -629,6 +636,18 @@ mod tests {
         assert_eq!(notes[0].note, Note::B); // H = B
         assert_eq!(notes[0].octave, 4);
         assert_eq!(notes[0].duration, Duration::Sixteenth);
+    }
+
+    #[test]
+    fn zero_bpm_is_rejected() {
+        assert_eq!(
+            Rtttl::parse("test:d=4,o=5,b=0:c").unwrap_err(),
+            ParseError::InvalidSettings
+        );
+        assert_eq!(
+            RtttlNote::new(Note::C, 5, Duration::Quarter).duration_ms(0),
+            0
+        );
     }
 
     #[test]

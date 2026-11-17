@@ -462,6 +462,12 @@ mod tests {
 
     use super::*;
 
+    /// Every note duration divides by the tempo: b=0 is an error, not a panic.
+    #[test]
+    fn melody_from_rtttl_zero_bpm() {
+        assert!(Melody::from_rtttl("test:d=4,o=5,b=0:c").is_err());
+    }
+
     #[test]
     fn melody_from_bytes_empty() {
         let data = [0xFF; 128];
