@@ -227,11 +227,13 @@ impl Melody {
     pub fn from_rtttl(rtttl: &str) -> Result<Self, RtttlError> {
         let parsed = rtttl_rs::Rtttl::parse(rtttl)?;
         let bpm = parsed.bpm();
+        // `Melody::bpm` mirrors the EEPROM bytes (which may hold 0); only the
+        // parsed tempo is ever divided by, and it is non-zero.
         let default_octave = parsed.default_octave();
         let default_duration = parsed.default_duration().to_rtttl();
 
         let mut melody = Self {
-            bpm,
+            bpm: bpm.get(),
             default_octave,
             default_duration,
             entries: [MelodyEntry {
