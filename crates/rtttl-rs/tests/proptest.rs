@@ -1,7 +1,7 @@
 //! Property-based tests for rtttl-rs.
 
 use proptest::prelude::*;
-use rtttl_rs::{Duration, Note, ParseError, Rtttl, RtttlNote};
+use rtttl_rs::{Duration, NonZeroU16, Note, ParseError, Rtttl, RtttlNote};
 
 /// Strategy to generate valid note characters.
 fn note_char_strategy() -> impl Strategy<Value = char> {
@@ -119,6 +119,16 @@ proptest! {
         prop_assert_eq!(parsed.name(), name.as_str());
     }
 
+    /// A zero tempo is rejected whatever else the header holds.
+    #[test]
+    fn zero_bpm_always_rejected(
+        name in name_strategy(),
+        dur in duration_strategy(),
+    ) {
+        let rtttl = format!("{}:d={},b=0:c", name, dur);
+        prop_assert_eq!(Rtttl::parse(&rtttl).unwrap_err(), ParseError::InvalidSettings);
+    }
+
     /// Parsed RTTTL should have the correct BPM.
     #[test]
     fn parsed_bpm_matches(
@@ -127,7 +137,7 @@ proptest! {
     ) {
         let rtttl = format!("{}:d=4,o=5,b={}:c", name, bpm);
         let parsed = Rtttl::parse(&rtttl).unwrap();
-        prop_assert_eq!(parsed.bpm(), bpm);
+        prop_assert_eq!(parsed.bpm().get(), bpm);
     }
 
     /// Parsed RTTTL should have the correct default octave.
@@ -170,7 +180,7 @@ proptest! {
     ) {
         let duration = Duration::from_rtttl(dur).unwrap();
         let note = RtttlNote::new(Note::C, 5, duration);
-        let ms = note.duration_ms(bpm);
+        let ms = note.duration_ms(NonZeroU16::new(bpm).unwrap());
 
         // Duration should be positive
         prop_assert!(ms > 0);
@@ -189,6 +199,7 @@ proptest! {
         let duration = Duration::from_rtttl(dur).unwrap();
         let regular = RtttlNote::new(Note::C, 5, duration);
         let dotted = RtttlNote::dotted(Note::C, 5, duration);
+        let bpm = NonZeroU16::new(bpm).unwrap();
 
         let regular_ms = regular.duration_ms(bpm);
         let dotted_ms = dotted.duration_ms(bpm);

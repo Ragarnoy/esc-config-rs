@@ -24,7 +24,7 @@
 //! let parsed = Rtttl::parse(rtttl).unwrap();
 //!
 //! assert_eq!(parsed.name(), "test");
-//! assert_eq!(parsed.bpm(), 120);
+//! assert_eq!(parsed.bpm().get(), 120);
 //! assert_eq!(parsed.notes().count(), 7);
 //! ```
 //!
@@ -39,6 +39,11 @@
 //! This crate is `no_std` by default. Enable the `std` feature for error trait implementations.
 
 #![no_std]
+
+pub use core::num::NonZeroU16;
+
+/// Tempo when the header has no `b=` (the RTTTL default).
+pub const DEFAULT_BPM: NonZeroU16 = NonZeroU16::new(120).unwrap();
 
 #[cfg(feature = "std")]
 extern crate std;
@@ -172,9 +177,9 @@ impl RtttlNote {
     /// Calculate duration in milliseconds given BPM.
     ///
     /// A whole note at 120 BPM = 2000ms (4 beats * 500ms per beat).
-    pub const fn duration_ms(&self, bpm: u16) -> u32 {
+    pub const fn duration_ms(&self, bpm: NonZeroU16) -> u32 {
         // Whole note duration = 4 beats = 4 * (60000 / bpm) ms
-        let whole_note_ms = 240_000u32 / (bpm as u32);
+        let whole_note_ms = 240_000u32 / (bpm.get() as u32);
         let base_ms = whole_note_ms / (self.duration as u32);
 
         if self.dotted {
@@ -190,7 +195,7 @@ impl RtttlNote {
 pub enum ParseError {
     /// Missing colon separator in header.
     MissingColon,
-    /// Invalid or missing settings section.
+    /// Invalid or missing settings section, or a tempo of `b=0`.
     InvalidSettings,
     /// Invalid note format.
     InvalidNote,
@@ -204,7 +209,7 @@ pub struct Rtttl<'a> {
     name: &'a str,
     default_duration: Duration,
     default_octave: u8,
-    bpm: u16,
+    bpm: NonZeroU16,
     notes_str: &'a str,
 }
 
@@ -229,7 +234,7 @@ impl<'a> Rtttl<'a> {
         // Parse settings
         let mut default_duration = Duration::Quarter;
         let mut default_octave = 5u8;
-        let mut bpm = 120u16;
+        let mut bpm = DEFAULT_BPM;
 
         for setting in settings_str.split(',') {
             let setting = setting.trim();
@@ -243,7 +248,8 @@ impl<'a> Rtttl<'a> {
                 }
             } else if let Some(val) = setting.strip_prefix("b=") {
                 if let Some(b) = parse_number_u16(val) {
-                    bpm = b;
+                    // Every duration divides by the tempo.
+                    bpm = NonZeroU16::new(b).ok_or(ParseError::InvalidSettings)?;
                 }
             }
         }
@@ -272,8 +278,8 @@ impl<'a> Rtttl<'a> {
         self.default_octave
     }
 
-    /// Get the BPM (beats per minute).
-    pub const fn bpm(&self) -> u16 {
+    /// Get the BPM (beats per minute). Never zero: `parse` rejects `b=0`.
+    pub const fn bpm(&self) -> NonZeroU16 {
         self.bpm
     }
 
@@ -505,7 +511,7 @@ mod tests {
         let parsed = Rtttl::parse(rtttl).unwrap();
 
         assert_eq!(parsed.name(), "test");
-        assert_eq!(parsed.bpm(), 120);
+        assert_eq!(parsed.bpm().get(), 120);
         assert_eq!(parsed.default_octave(), 5);
         assert_eq!(parsed.default_duration(), Duration::Quarter);
 
@@ -599,7 +605,7 @@ mod tests {
         let parsed = Rtttl::parse(rtttl).unwrap();
 
         assert_eq!(parsed.name(), "doom");
-        assert_eq!(parsed.bpm(), 420);
+        assert_eq!(parsed.bpm().get(), 420);
         assert_eq!(parsed.default_octave(), 4);
 
         let notes: Vec<_> = parsed.notes().collect();
@@ -632,18 +638,26 @@ mod tests {
     }
 
     #[test]
+    fn zero_bpm_is_rejected() {
+        assert_eq!(
+            Rtttl::parse("test:d=4,o=5,b=0:c").unwrap_err(),
+            ParseError::InvalidSettings
+        );
+    }
+
+    #[test]
     fn duration_ms_calculation() {
         let note = RtttlNote::new(Note::C, 5, Duration::Quarter);
         // At 120 BPM: quarter note = 500ms
-        assert_eq!(note.duration_ms(120), 500);
+        assert_eq!(note.duration_ms(DEFAULT_BPM), 500);
 
         let whole = RtttlNote::new(Note::C, 5, Duration::Whole);
         // At 120 BPM: whole note = 2000ms
-        assert_eq!(whole.duration_ms(120), 2000);
+        assert_eq!(whole.duration_ms(DEFAULT_BPM), 2000);
 
         let dotted = RtttlNote::dotted(Note::C, 5, Duration::Quarter);
         // Dotted quarter at 120 BPM = 750ms
-        assert_eq!(dotted.duration_ms(120), 750);
+        assert_eq!(dotted.duration_ms(DEFAULT_BPM), 750);
     }
 
     #[test]
